@@ -1,4 +1,4 @@
-module golang.org/x/net
+module github.com/SandwichDev/net
 
 go 1.11
 
