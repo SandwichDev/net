@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/net/html/atom"
+	"github.com/SandwichDev/net/html/atom"
 )
 
 type testAttrs struct {

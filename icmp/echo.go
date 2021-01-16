@@ -7,9 +7,9 @@ package icmp
 import (
 	"encoding/binary"
 
-	"golang.org/x/net/internal/iana"
-	"golang.org/x/net/ipv4"
-	"golang.org/x/net/ipv6"
+	"github.com/SandwichDev/net/internal/iana"
+	"github.com/SandwichDev/net/ipv4"
+	"github.com/SandwichDev/net/ipv6"
 )
 
 // An Echo represents an ICMP echo request or reply message body.

@@ -1,4 +1,4 @@
-module golang.org/x/net/http2/h2demo
+module github.com/SandwichDev/net/http2/h2demo
 
 go 1.12
 
