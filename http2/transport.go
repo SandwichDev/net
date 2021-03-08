@@ -1680,6 +1680,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 			f("te", "trailers")
 
 		}
+		fmt.Println("Checking Content Length")
 		if shouldSendReqContentLength(req.Method, contentLength) {
 			fmt.Println("Setting Content Length?")
 			f("content-length", strconv.FormatInt(contentLength, 10))
