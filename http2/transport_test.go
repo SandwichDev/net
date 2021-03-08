@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,9 +19,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/http/httptrace"
 	"net/textproto"
 	"net/url"
 	"os"
@@ -32,6 +31,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SandwichDev/http/http"
+	"github.com/SandwichDev/http/http/httptest"
+	"github.com/SandwichDev/http/http/httptrace"
 
 	"github.com/SandwichDev/net/http2/hpack"
 )
@@ -757,32 +760,36 @@ func (ct *clientTester) readNonSettingsFrame() (Frame, error) {
 
 func (ct *clientTester) cleanup() {
 	ct.tr.CloseIdleConnections()
-
-	// close both connections, ignore the error if its already closed
-	ct.sc.Close()
-	ct.cc.Close()
 }
 
 func (ct *clientTester) run() {
-	var errOnce sync.Once
-	var wg sync.WaitGroup
-
-	run := func(which string, fn func() error) {
-		defer wg.Done()
-		if err := fn(); err != nil {
-			errOnce.Do(func() {
-				ct.t.Errorf("%s: %v", which, err)
-				ct.cleanup()
-			})
+	errc := make(chan error, 2)
+	ct.start("client", errc, ct.client)
+	ct.start("server", errc, ct.server)
+	defer ct.cleanup()
+	for i := 0; i < 2; i++ {
+		if err := <-errc; err != nil {
+			ct.t.Error(err)
+			return
 		}
 	}
+}
 
-	wg.Add(2)
-	go run("client", ct.client)
-	go run("server", ct.server)
-	wg.Wait()
-
-	errOnce.Do(ct.cleanup) // clean up if no error
+func (ct *clientTester) start(which string, errc chan<- error, fn func() error) {
+	go func() {
+		finished := false
+		var err error
+		defer func() {
+			if !finished {
+				err = fmt.Errorf("%s goroutine didn't finish.", which)
+			} else if err != nil {
+				err = fmt.Errorf("%s: %v", which, err)
+			}
+			errc <- err
+		}()
+		err = fn()
+		finished = true
+	}()
 }
 
 func (ct *clientTester) readFrame() (Frame, error) {
@@ -2251,69 +2258,6 @@ func TestTransportRejectsConnHeaders(t *testing.T) {
 	}
 }
 
-// Reject content-length headers containing a sign.
-// See https://golang.org/issue/39017
-func TestTransportRejectsContentLengthWithSign(t *testing.T) {
-	tests := []struct {
-		name   string
-		cl     []string
-		wantCL string
-	}{
-		{
-			name:   "proper content-length",
-			cl:     []string{"3"},
-			wantCL: "3",
-		},
-		{
-			name:   "ignore cl with plus sign",
-			cl:     []string{"+3"},
-			wantCL: "",
-		},
-		{
-			name:   "ignore cl with minus sign",
-			cl:     []string{"-3"},
-			wantCL: "",
-		},
-		{
-			name:   "max int64, for safe uint64->int64 conversion",
-			cl:     []string{"9223372036854775807"},
-			wantCL: "9223372036854775807",
-		},
-		{
-			name:   "overflows int64, so ignored",
-			cl:     []string{"9223372036854775808"},
-			wantCL: "",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Length", tt.cl[0])
-			}, optOnlyServer)
-			defer st.Close()
-			tr := &Transport{TLSClientConfig: tlsConfigInsecure}
-			defer tr.CloseIdleConnections()
-
-			req, _ := http.NewRequest("HEAD", st.ts.URL, nil)
-			res, err := tr.RoundTrip(req)
-
-			var got string
-			if err != nil {
-				got = fmt.Sprintf("ERROR: %v", err)
-			} else {
-				got = res.Header.Get("Content-Length")
-				res.Body.Close()
-			}
-
-			if got != tt.wantCL {
-				t.Fatalf("Got: %q\nWant: %q", got, tt.wantCL)
-			}
-		})
-	}
-}
-
 // golang.org/issue/14048
 func TestTransportFailsOnInvalidHeaders(t *testing.T) {
 	st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {
@@ -3368,174 +3312,6 @@ func TestTransportNoRaceOnRequestObjectAfterRequestComplete(t *testing.T) {
 	req.Header = http.Header{}
 }
 
-func TestTransportCloseAfterLostPing(t *testing.T) {
-	clientDone := make(chan struct{})
-	ct := newClientTester(t)
-	ct.tr.PingTimeout = 1 * time.Second
-	ct.tr.ReadIdleTimeout = 1 * time.Second
-	ct.client = func() error {
-		defer ct.cc.(*net.TCPConn).CloseWrite()
-		defer close(clientDone)
-		req, _ := http.NewRequest("GET", "https://dummy.tld/", nil)
-		_, err := ct.tr.RoundTrip(req)
-		if err == nil || !strings.Contains(err.Error(), "client connection lost") {
-			return fmt.Errorf("expected to get error about \"connection lost\", got %v", err)
-		}
-		return nil
-	}
-	ct.server = func() error {
-		ct.greet()
-		<-clientDone
-		return nil
-	}
-	ct.run()
-}
-
-func TestTransportPingWhenReading(t *testing.T) {
-	testCases := []struct {
-		name                   string
-		readIdleTimeout        time.Duration
-		serverResponseInterval time.Duration
-		expectedPingCount      int
-	}{
-		{
-			name:                   "two pings in each serverResponseInterval",
-			readIdleTimeout:        400 * time.Millisecond,
-			serverResponseInterval: 1000 * time.Millisecond,
-			expectedPingCount:      4,
-		},
-		{
-			name:                   "one ping in each serverResponseInterval",
-			readIdleTimeout:        700 * time.Millisecond,
-			serverResponseInterval: 1000 * time.Millisecond,
-			expectedPingCount:      2,
-		},
-		{
-			name:                   "zero ping in each serverResponseInterval",
-			readIdleTimeout:        1000 * time.Millisecond,
-			serverResponseInterval: 500 * time.Millisecond,
-			expectedPingCount:      0,
-		},
-		{
-			name:                   "0 readIdleTimeout means no ping",
-			readIdleTimeout:        0 * time.Millisecond,
-			serverResponseInterval: 500 * time.Millisecond,
-			expectedPingCount:      0,
-		},
-	}
-
-	for _, tc := range testCases {
-		tc := tc // capture range variable
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			testTransportPingWhenReading(t, tc.readIdleTimeout, tc.serverResponseInterval, tc.expectedPingCount)
-		})
-	}
-}
-
-func testTransportPingWhenReading(t *testing.T, readIdleTimeout, serverResponseInterval time.Duration, expectedPingCount int) {
-	var pingCount int
-	clientDone := make(chan struct{})
-	ct := newClientTester(t)
-	ct.tr.PingTimeout = 10 * time.Millisecond
-	ct.tr.ReadIdleTimeout = readIdleTimeout
-	// guards the ct.fr.Write
-	var wmu sync.Mutex
-
-	ct.client = func() error {
-		defer ct.cc.(*net.TCPConn).CloseWrite()
-		if runtime.GOOS == "plan9" {
-			// CloseWrite not supported on Plan 9; Issue 17906
-			defer ct.cc.(*net.TCPConn).Close()
-		}
-		defer close(clientDone)
-		req, _ := http.NewRequest("GET", "https://dummy.tld/", nil)
-		res, err := ct.tr.RoundTrip(req)
-		if err != nil {
-			return fmt.Errorf("RoundTrip: %v", err)
-		}
-		defer res.Body.Close()
-		if res.StatusCode != 200 {
-			return fmt.Errorf("status code = %v; want %v", res.StatusCode, 200)
-		}
-		_, err = ioutil.ReadAll(res.Body)
-		return err
-	}
-
-	ct.server = func() error {
-		ct.greet()
-		var buf bytes.Buffer
-		enc := hpack.NewEncoder(&buf)
-		var wg sync.WaitGroup
-		defer wg.Wait()
-		for {
-			f, err := ct.fr.ReadFrame()
-			if err != nil {
-				select {
-				case <-clientDone:
-					// If the client's done, it
-					// will have reported any
-					// errors on its side.
-					return nil
-				default:
-					return err
-				}
-			}
-			switch f := f.(type) {
-			case *WindowUpdateFrame, *SettingsFrame:
-			case *HeadersFrame:
-				if !f.HeadersEnded() {
-					return fmt.Errorf("headers should have END_HEADERS be ended: %v", f)
-				}
-				enc.WriteField(hpack.HeaderField{Name: ":status", Value: strconv.Itoa(200)})
-				ct.fr.WriteHeaders(HeadersFrameParam{
-					StreamID:      f.StreamID,
-					EndHeaders:    true,
-					EndStream:     false,
-					BlockFragment: buf.Bytes(),
-				})
-
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					for i := 0; i < 2; i++ {
-						wmu.Lock()
-						if err := ct.fr.WriteData(f.StreamID, false, []byte(fmt.Sprintf("hello, this is server data frame %d", i))); err != nil {
-							wmu.Unlock()
-							t.Error(err)
-							return
-						}
-						wmu.Unlock()
-						time.Sleep(serverResponseInterval)
-					}
-					wmu.Lock()
-					if err := ct.fr.WriteData(f.StreamID, true, []byte("hello, this is last server data frame")); err != nil {
-						wmu.Unlock()
-						t.Error(err)
-						return
-					}
-					wmu.Unlock()
-				}()
-			case *PingFrame:
-				pingCount++
-				wmu.Lock()
-				if err := ct.fr.WritePing(true, f.Data); err != nil {
-					wmu.Unlock()
-					return err
-				}
-				wmu.Unlock()
-			default:
-				return fmt.Errorf("Unexpected client frame %v", f)
-			}
-		}
-	}
-	ct.run()
-	if e, a := expectedPingCount, pingCount; e != a {
-		t.Errorf("expected receiving %d pings, got %d pings", e, a)
-
-	}
-}
-
 func TestTransportRetryAfterGOAWAY(t *testing.T) {
 	var dialer struct {
 		sync.Mutex
@@ -3582,6 +3358,8 @@ func TestTransportRetryAfterGOAWAY(t *testing.T) {
 	}
 
 	errs := make(chan error, 3)
+	done := make(chan struct{})
+	defer close(done)
 
 	// Client.
 	go func() {
@@ -3603,7 +3381,12 @@ func TestTransportRetryAfterGOAWAY(t *testing.T) {
 
 	// Server for the first request.
 	go func() {
-		ct := <-ct1
+		var ct *clientTester
+		select {
+		case ct = <-ct1:
+		case <-done:
+			return
+		}
 
 		connToClose <- ct.cc
 		ct.greet()
@@ -3622,7 +3405,12 @@ func TestTransportRetryAfterGOAWAY(t *testing.T) {
 
 	// Server for the second request.
 	go func() {
-		ct := <-ct2
+		var ct *clientTester
+		select {
+		case ct = <-ct2:
+		case <-done:
+			return
+		}
 
 		connToClose <- ct.cc
 		ct.greet()
@@ -3651,15 +3439,23 @@ func TestTransportRetryAfterGOAWAY(t *testing.T) {
 	}()
 
 	for k := 0; k < 3; k++ {
-		err := <-errs
-		if err != nil {
-			t.Error(err)
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(1 * time.Second):
+			t.Errorf("timed out")
 		}
 	}
 
-	close(connToClose)
-	for c := range connToClose {
-		c.Close()
+	for {
+		select {
+		case c := <-connToClose:
+			c.Close()
+		default:
+			return
+		}
 	}
 }
 
@@ -4134,15 +3930,11 @@ func TestTransportNoBodyMeansNoDATA(t *testing.T) {
 	ct.run()
 }
 
-func benchSimpleRoundTrip(b *testing.B, nReqHeaders, nResHeader int) {
+func benchSimpleRoundTrip(b *testing.B, nHeaders int) {
 	defer disableGoroutineTracking()()
 	b.ReportAllocs()
 	st := newServerTester(b,
 		func(w http.ResponseWriter, r *http.Request) {
-			for i := 0; i < nResHeader; i++ {
-				name := fmt.Sprint("A-", i)
-				w.Header().Set(name, "*")
-			}
 		},
 		optOnlyServer,
 		optQuiet,
@@ -4157,7 +3949,7 @@ func benchSimpleRoundTrip(b *testing.B, nReqHeaders, nResHeader int) {
 		b.Fatal(err)
 	}
 
-	for i := 0; i < nReqHeaders; i++ {
+	for i := 0; i < nHeaders; i++ {
 		name := fmt.Sprint("A-", i)
 		req.Header.Set(name, "*")
 	}
@@ -4247,18 +4039,489 @@ func TestTransportHandlesInvalidStatuslessResponse(t *testing.T) {
 	ct.run()
 }
 
-func BenchmarkClientRequestHeaders(b *testing.B) {
-	b.Run("   0 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 0, 0) })
-	b.Run("  10 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 10, 0) })
-	b.Run(" 100 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 100, 0) })
-	b.Run("1000 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 1000, 0) })
+func newTestPushHandlerReadResponse() *testPushHandlerReadResponse {
+	return &testPushHandlerReadResponse{
+		done: make(chan struct{}),
+	}
 }
 
-func BenchmarkClientResponseHeaders(b *testing.B) {
-	b.Run("   0 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 0, 0) })
-	b.Run("  10 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 0, 10) })
-	b.Run(" 100 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 0, 100) })
-	b.Run("1000 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 0, 1000) })
+type testPushHandlerReadResponse struct {
+	promise       *http.Request
+	origReqURL    *url.URL
+	origReqHeader http.Header
+	push          *http.Response
+	pushErr       error
+	done          chan struct{}
+}
+
+func (ph *testPushHandlerReadResponse) HandlePush(r *PushedRequest) {
+	ph.promise = r.Promise
+	ph.origReqURL = r.OriginalRequestURL
+	ph.origReqHeader = r.OriginalRequestHeader
+	ph.push, ph.pushErr = r.ReadResponse(r.Promise.Context())
+	close(ph.done)
+}
+
+func testTransportHandlePushPromise(t *testing.T,
+	configTransport func(t *testing.T, tr *Transport),
+	useHTTP bool) {
+	const (
+		initiatingResponseText = "response text"
+
+		promisePath      = "/getmestuff"
+		promiseHeaderKey = "headkey"
+
+		pushText                         = "push text"
+		pushTrailerKey, pushTrailerValue = "trailkey", "end val"
+	)
+	scheme := "https"
+	if useHTTP {
+		scheme = "http"
+	}
+	promiseHeaderValue := strings.Repeat("a", 2*initialMaxFrameSize) // test PUSH_PROMISE+CONTINUATION
+
+	checkResp := func(t *testing.T, res *http.Response, text string) error {
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return fmt.Errorf("status code = %v; want 200", res.StatusCode)
+		}
+		if slurp, err := ioutil.ReadAll(res.Body); string(slurp) != text || err != nil {
+			return fmt.Errorf("res.Body ReadAll = %q, %v; want %q, %v", slurp, err, text, nil)
+		}
+		return nil
+	}
+	ct := newClientTester(t)
+	if configTransport != nil {
+		configTransport(t, ct.tr)
+	}
+	ct.client = func() error {
+		pushHandler := newTestPushHandlerReadResponse()
+		ct.tr.PushHandler = pushHandler
+		req := httptest.NewRequest("GET", scheme+"://dummy.tld/", nil)
+		req.Header.Set("foo", "bar")
+		res, err := ct.tr.RoundTrip(req)
+		if err != nil {
+			return fmt.Errorf("RoundTrip: %v", err)
+		}
+		if err = checkResp(t, res, initiatingResponseText); err != nil {
+			return err
+		}
+		select {
+		case <-pushHandler.done:
+		case <-time.After(5 * time.Second):
+			return errors.New("timed out waiting for push to be handled")
+		}
+		if pushHandler.origReqURL != req.URL {
+			return fmt.Errorf("expected original request %q, got %q",
+				req.URL.String(), pushHandler.origReqURL.String())
+		}
+		if pushHandler.origReqHeader.Get("foo") != "bar" {
+			return fmt.Errorf("expected original request header %q's value to be %q, got %q",
+				"foo", "bar", pushHandler.origReqHeader.Get("foo"))
+		}
+		if pushHandler.promise == nil {
+			return fmt.Errorf("promise not received")
+		}
+		if pushHandler.promise.URL.Path != promisePath {
+			return fmt.Errorf("promise path = %q, want %q", pushHandler.promise.URL.Path, promisePath)
+		}
+		if pushHandler.promise.Header.Get(promiseHeaderKey) != promiseHeaderValue {
+			return fmt.Errorf("promise value for key %q = %q, want %q", promiseHeaderKey,
+				pushHandler.promise.Header.Get(promiseHeaderKey), promiseHeaderValue)
+		}
+
+		if pushHandler.pushErr != nil {
+			return fmt.Errorf("push error = %v; want %v", pushHandler.pushErr, nil)
+		}
+		if pushHandler.push == nil {
+			return fmt.Errorf("push not received")
+		}
+		if err = checkResp(t, pushHandler.push, pushText); err != nil {
+			return err
+		}
+		if pushHandler.push.Trailer.Get(pushTrailerKey) != pushTrailerValue {
+			return fmt.Errorf("promise value for key %q = %q, want %q", pushTrailerKey,
+				pushHandler.push.Trailer.Get(pushTrailerKey), pushTrailerValue)
+		}
+		return nil
+	}
+	ct.server = func() error {
+		ct.greet()
+		hf, _ := ct.firstHeaders()
+		var buf bytes.Buffer
+		enc := hpack.NewEncoder(&buf)
+
+		// Promise
+		const promiseID = 2
+		enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+		enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: scheme})
+		enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+		enc.WriteField(hpack.HeaderField{Name: ":path", Value: promisePath})
+		enc.WriteField(hpack.HeaderField{Name: promiseHeaderKey, Value: promiseHeaderValue})
+		ct.fr.WritePushPromise(PushPromiseParam{
+			StreamID:      hf.StreamID,
+			PromiseID:     promiseID,
+			BlockFragment: buf.Bytes(),
+			EndHeaders:    true,
+		})
+
+		// Push
+		buf.Reset()
+		enc.WriteField(hpack.HeaderField{Name: ":status", Value: "200"})
+		ct.fr.WriteHeaders(HeadersFrameParam{
+			StreamID:      promiseID,
+			EndHeaders:    true,
+			EndStream:     false,
+			BlockFragment: buf.Bytes(),
+		})
+		ct.fr.WriteData(promiseID, false, []byte(pushText))
+		// add trailer
+		buf.Reset()
+		enc.WriteField(hpack.HeaderField{Name: pushTrailerKey, Value: pushTrailerValue})
+		ct.fr.WriteHeaders(HeadersFrameParam{
+			StreamID:      promiseID,
+			EndHeaders:    true,
+			EndStream:     true,
+			BlockFragment: buf.Bytes(),
+		})
+
+		// Respond to initiating request
+		buf.Reset()
+		enc.WriteField(hpack.HeaderField{Name: ":status", Value: "200"})
+		ct.fr.WriteHeaders(HeadersFrameParam{
+			StreamID:      hf.StreamID,
+			EndHeaders:    true,
+			EndStream:     false,
+			BlockFragment: buf.Bytes(),
+		})
+		ct.fr.WriteData(hf.StreamID, true, []byte(initiatingResponseText))
+		return nil
+	}
+	ct.run()
+}
+
+func setMockCert(t *testing.T, tr *Transport) {
+	// Self-signed certificate to `dummy.tld`
+	certPem := `
+-----BEGIN CERTIFICATE-----
+MIIEADCCAuigAwIBAgIJALtnD0hvKA2fMA0GCSqGSIb3DQEBCwUAMIGTMQswCQYD
+VQQGEwJDTjEQMA4GA1UECAwHQmVpamluZzEQMA4GA1UEBwwHQmVpamluZzESMBAG
+A1UECgwJVGlhbmppIFd1MRMwEQYDVQQLDApnb2xhbmctZGV2MRIwEAYDVQQDDAlk
+dW1teS50bGQxIzAhBgkqhkiG9w0BCQEWFGdvbGFuZy1kZXZAd3V0ai5pbmZvMCAX
+DTE5MDkyMjE0MjUwNVoYDzIxMTkwODI5MTQyNTA1WjCBkzELMAkGA1UEBhMCQ04x
+EDAOBgNVBAgMB0JlaWppbmcxEDAOBgNVBAcMB0JlaWppbmcxEjAQBgNVBAoMCVRp
+YW5qaSBXdTETMBEGA1UECwwKZ29sYW5nLWRldjESMBAGA1UEAwwJZHVtbXkudGxk
+MSMwIQYJKoZIhvcNAQkBFhRnb2xhbmctZGV2QHd1dGouaW5mbzCCASIwDQYJKoZI
+hvcNAQEBBQADggEPADCCAQoCggEBALqfRTzoEDHZN2a1uBmU2NFvxKGY0zAI07bB
++0kGOOuqlixj2+Dvd2/eJXoDh8GugRaihSmmvx+XiuoA7MVOhUbE/tkhPmJ7L/sv
+JRY7YNNq7hTSj0DXoP8iteKF5uTyCuBB1zQUFYfPcs4Nl5hF5iuhPmEPG9vn9b8Z
+XFcwITakUPeXGLkJb8D1vXmXFew3e1hyROZ+klbJ96yXnGXoYQ4WDrBsVA3rHBuW
+ouHNT0qA3dGPqkniOIGBuMUNaeEGoPhi1o4B9vQBmEHwULKpcOJbr+sj5YopCs5p
+9wQuFNI6VsbaqLyiQE+BSGtoCX3FQyl4lpoPj/9k5kmty5K0v4kCAwEAAaNTMFEw
+HQYDVR0OBBYEFIl5xOTIsFwQ68QhyY7kPy9NNUx4MB8GA1UdIwQYMBaAFIl5xOTI
+sFwQ68QhyY7kPy9NNUx4MA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQAD
+ggEBAC6+U++9uTaM9JI5BGLATP8TSHdgJdC4nJWGao4CBEOWN1RO8LhSxwNHz729
+GtJWoah9giIx2mjmYJfJtzZH30rRSRt1MXAOJX1NSJ4iWDH/jT0tC7oPhfrvr7FM
+ZVZplk7k59+bQlo6q0+u0ax9Hrarwgx6j+K9v+5/dhc+qGk3pdoFa/Sa3gzQ3Gqo
+V08pmKjQSDuM4Cvgd7UXg9PhrYtlCQsWOnuhJcPl+gkUlTvRStlpQurAt8FfpieV
+Mff+u1o/ompjfVA7Knr38ZdaoXkzoLoypAWX1veeTzhFCITSMnnHVq0/OhpmbtcF
+sIzU/RQ4lLHuDXjzQVWxCwUp0oY=
+-----END CERTIFICATE-----
+`
+	pemBlock, _ := pem.Decode([]byte(certPem))
+	cert, err := x509.ParseCertificate(pemBlock.Bytes)
+	if err != nil {
+		t.Fatalf("failed to parse certificate: %s", err)
+	}
+	req := httptest.NewRequest("GET", "https://dummy.tld:443/", nil)
+	cc, err := tr.connPool().GetClientConn(req, "dummy.tld:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc.tlsState = &tls.ConnectionState{}
+	cert.DNSNames = []string{"dummy.tld"}
+	cc.tlsState.VerifiedChains = [][]*x509.Certificate{{cert}}
+	cc.tlsState.PeerCertificates = []*x509.Certificate{cert}
+	tr.TLSClientConfig = &tls.Config{}
+}
+
+func TestTransportHandlePushPromise_TLS_SkipVerify(t *testing.T) {
+	testTransportHandlePushPromise(t, nil, false)
+}
+
+func TestTransportHandlePushPromise_TLS(t *testing.T) {
+	testTransportHandlePushPromise(t, setMockCert, false)
+}
+
+func TestTransportHandlePushPromise_NonTLS(t *testing.T) {
+	allowHTTP := func(t *testing.T, tr *Transport) {
+		tr.AllowHTTP = true
+		tr.TLSClientConfig = &tls.Config{}
+	}
+	testTransportHandlePushPromise(t, allowHTTP, true)
+}
+
+func testTransport_Push_Reject(t *testing.T,
+	h PushHandler,
+	getPush func(streamID uint32) PushPromiseParam,
+	getExpectedErr func(streamID uint32) error) {
+
+	ct := newClientTester(t)
+	ct.client = func() error {
+		ct.tr.PushHandler = h
+		req := httptest.NewRequest("GET", "https://dummy.tld/", nil)
+		_, gotErr := ct.tr.RoundTrip(req)
+		var streamID uint32
+		if se, ok := gotErr.(StreamError); ok {
+			gotErr = streamError(se.StreamID, se.Code)
+			streamID = se.StreamID
+		}
+		wantErr := getExpectedErr(streamID)
+		if !reflect.DeepEqual(wantErr, gotErr) {
+			return fmt.Errorf("expected %v, but got %v", wantErr, gotErr)
+		}
+		return nil
+	}
+	ct.server = func() error {
+		ct.greet()
+		hf, _ := ct.firstHeaders()
+		ct.fr.WritePushPromise(getPush(hf.StreamID))
+		return nil
+	}
+	ct.run()
+}
+
+func TestTransport_Push_RejectIfDisabled(t *testing.T) {
+	testTransport_Push_Reject(t,
+		nil,
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		func(uint32) error {
+			return ConnectionError(ErrCodeProtocol)
+		},
+	)
+}
+
+func TestTransport_Push_RejectRecursivePush(t *testing.T) {
+	testTransport_Push_Reject(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{2, 2, buf.Bytes(), true, 0}
+		},
+		func(uint32) error {
+			return ConnectionError(ErrCodeProtocol)
+		},
+	)
+}
+
+func TestTransport_Push_RejectInvalidPromiseId(t *testing.T) {
+	testTransport_Push_Reject(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{streamID, 3, buf.Bytes(), true, 0}
+		},
+		func(uint32) error {
+			return ConnectionError(ErrCodeProtocol)
+		},
+	)
+}
+
+func TestTransport_Push_RejectInitiatingStream_NonExistent(t *testing.T) {
+	testTransport_Push_Reject(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{7, 2, buf.Bytes(), true, 0}
+		},
+		func(uint32) error {
+			return ConnectionError(ErrCodeProtocol)
+		},
+	)
+}
+
+func TestTransport_Push_RejectMissingAuthority(t *testing.T) {
+	testTransport_Push_Reject(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		func(streamID uint32) error {
+			return streamError(streamID, ErrCodeProtocol)
+		},
+	)
+}
+
+func TestTransport_Push_RejectHeader_BodyRelated(t *testing.T) {
+	testTransport_Push_Reject(t, newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			enc.WriteField(hpack.HeaderField{Name: "content-length", Value: "12"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		func(streamID uint32) error {
+			return streamError(streamID, ErrCodeProtocol)
+		},
+	)
+}
+
+func TestTransport_Push_RejectHeader_ConnRelated(t *testing.T) {
+	testTransport_Push_Reject(t, newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			enc.WriteField(hpack.HeaderField{Name: "connection", Value: "close"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		func(streamID uint32) error {
+			return streamError(streamID, ErrCodeProtocol)
+		},
+	)
+}
+
+func testTransport_Push_RejectAuthError(t *testing.T,
+	h PushHandler,
+	getPush func(streamId uint32) PushPromiseParam,
+	useHTTP bool) {
+	ct := newClientTester(t)
+
+	scheme := "https"
+	if useHTTP {
+		scheme = "http"
+		ct.tr.AllowHTTP = true
+		ct.tr.TLSClientConfig = &tls.Config{}
+	} else {
+		setMockCert(t, ct.tr)
+	}
+	req := httptest.NewRequest("GET", scheme+"://dummy.tld:443/", nil)
+
+	ct.client = func() error {
+		ct.tr.PushHandler = h
+		_, err := ct.tr.RoundTrip(req)
+		if err != nil {
+			if _, ok := err.(StreamError); !ok {
+				return fmt.Errorf("expected stream error, but got %q", err)
+			}
+		} else {
+			return fmt.Errorf("expected stream error, but got no error")
+		}
+		return nil
+	}
+	ct.server = func() error {
+		ct.greet()
+		hf, _ := ct.firstHeaders()
+		ct.fr.WritePushPromise(getPush(hf.StreamID))
+		return nil
+	}
+	ct.run()
+}
+
+func TestTransport_Push_RejectAuthError_NonAuthoritativeHostname_TLS(t *testing.T) {
+	testTransport_Push_RejectAuthError(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "sub.foo.net"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		false,
+	)
+}
+
+func TestTransport_Push_RejectAuthError_NonAuthoritativeHostname_NonTLS(t *testing.T) {
+	testTransport_Push_RejectAuthError(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "http"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "sub.foo.net"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		true,
+	)
+}
+
+func TestTransport_Push_RejectAuthError_DifferentScheme(t *testing.T) {
+	testTransport_Push_RejectAuthError(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "http"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		false,
+	)
+}
+
+func TestTransport_Push_RejectAuthError_DifferentPort(t *testing.T) {
+	testTransport_Push_RejectAuthError(t,
+		newTestPushHandlerReadResponse(),
+		func(streamID uint32) PushPromiseParam {
+			var buf bytes.Buffer
+			enc := hpack.NewEncoder(&buf)
+			enc.WriteField(hpack.HeaderField{Name: ":method", Value: "GET"})
+			enc.WriteField(hpack.HeaderField{Name: ":scheme", Value: "https"})
+			enc.WriteField(hpack.HeaderField{Name: ":authority", Value: "dummy.tld:1234"})
+			enc.WriteField(hpack.HeaderField{Name: ":path", Value: "/hello"})
+			return PushPromiseParam{streamID, 2, buf.Bytes(), true, 0}
+		},
+		false,
+	)
+}
+
+func BenchmarkClientRequestHeaders(b *testing.B) {
+	b.Run("   0 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 0) })
+	b.Run("  10 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 10) })
+	b.Run(" 100 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 100) })
+	b.Run("1000 Headers", func(b *testing.B) { benchSimpleRoundTrip(b, 1000) })
 }
 
 func activeStreams(cc *ClientConn) int {
@@ -4529,13 +4792,13 @@ func (r *errReader) Read(p []byte) (int, error) {
 }
 
 func testTransportBodyReadError(t *testing.T, body []byte) {
-	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
-		// So far we've only seen this be flaky on Windows and Plan 9,
+	if runtime.GOOS == "windows" {
+		// So far we've only seen this be flaky on Windows,
 		// perhaps due to TCP behavior on shutdowns while
 		// unread data is in flight. This test should be
 		// fixed, but a skip is better than annoying people
 		// for now.
-		t.Skipf("skipping flaky test on %s; https://golang.org/issue/31260", runtime.GOOS)
+		t.Skip("skipping flaky test on Windows; https://golang.org/issue/31260")
 	}
 	clientDone := make(chan struct{})
 	ct := newClientTester(t)
@@ -4723,7 +4986,7 @@ func TestTransportBodyLargerThanSpecifiedContentLength_len2(t *testing.T) {
 
 func testTransportBodyLargerThanSpecifiedContentLength(t *testing.T, body *chunkReader, contentLen int64) {
 	st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {
-		r.Body.Read(make([]byte, 6))
+		// Nothing.
 	}, optOnlyServer)
 	defer st.Close()
 
@@ -4774,147 +5037,4 @@ func TestClientConnTooIdle(t *testing.T) {
 			t.Errorf("%d. got %v; want %v", i, got, tt.want)
 		}
 	}
-}
-
-type fakeConnErr struct {
-	net.Conn
-	writeErr error
-	closed   bool
-}
-
-func (fce *fakeConnErr) Write(b []byte) (n int, err error) {
-	return 0, fce.writeErr
-}
-
-func (fce *fakeConnErr) Close() error {
-	fce.closed = true
-	return nil
-}
-
-// issue 39337: close the connection on a failed write
-func TestTransportNewClientConnCloseOnWriteError(t *testing.T) {
-	tr := &Transport{}
-	writeErr := errors.New("write error")
-	fakeConn := &fakeConnErr{writeErr: writeErr}
-	_, err := tr.NewClientConn(fakeConn)
-	if err != writeErr {
-		t.Fatalf("expected %v, got %v", writeErr, err)
-	}
-	if !fakeConn.closed {
-		t.Error("expected closed conn")
-	}
-}
-
-func TestTransportRoundtripCloseOnWriteError(t *testing.T) {
-	req, err := http.NewRequest("GET", "https://dummy.tld/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {}, optOnlyServer)
-	defer st.Close()
-
-	tr := &Transport{TLSClientConfig: tlsConfigInsecure}
-	defer tr.CloseIdleConnections()
-	cc, err := tr.dialClientConn(st.ts.Listener.Addr().String(), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	writeErr := errors.New("write error")
-	cc.wmu.Lock()
-	cc.werr = writeErr
-	cc.wmu.Unlock()
-
-	_, err = cc.RoundTrip(req)
-	if err != writeErr {
-		t.Fatalf("expected %v, got %v", writeErr, err)
-	}
-
-	cc.mu.Lock()
-	closed := cc.closed
-	cc.mu.Unlock()
-	if !closed {
-		t.Fatal("expected closed")
-	}
-}
-
-// Issue 31192: A failed request may be retried if the body has not been read
-// already. If the request body has started to be sent, one must wait until it
-// is completed.
-func TestTransportBodyRewindRace(t *testing.T) {
-	st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Connection", "close")
-		w.WriteHeader(http.StatusOK)
-		return
-	}, optOnlyServer)
-	defer st.Close()
-
-	tr := &http.Transport{
-		TLSClientConfig: tlsConfigInsecure,
-		MaxConnsPerHost: 1,
-	}
-	err := ConfigureTransport(tr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{
-		Transport: tr,
-	}
-
-	const clients = 50
-
-	var wg sync.WaitGroup
-	wg.Add(clients)
-	for i := 0; i < clients; i++ {
-		req, err := http.NewRequest("POST", st.ts.URL, bytes.NewBufferString("abcdef"))
-		if err != nil {
-			t.Fatalf("unexpect new request error: %v", err)
-		}
-
-		go func() {
-			defer wg.Done()
-			res, err := client.Do(req)
-			if err == nil {
-				res.Body.Close()
-			}
-		}()
-	}
-
-	wg.Wait()
-}
-
-// Issue 42498: A request with a body will never be sent if the stream is
-// reset prior to sending any data.
-func TestTransportServerResetStreamAtHeaders(t *testing.T) {
-	st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}, optOnlyServer)
-	defer st.Close()
-
-	tr := &http.Transport{
-		TLSClientConfig:       tlsConfigInsecure,
-		MaxConnsPerHost:       1,
-		ExpectContinueTimeout: 10 * time.Second,
-	}
-
-	err := ConfigureTransport(tr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := &http.Client{
-		Transport: tr,
-	}
-
-	req, err := http.NewRequest("POST", st.ts.URL, errorReader{io.EOF})
-	if err != nil {
-		t.Fatalf("unexpect new request error: %v", err)
-	}
-	req.ContentLength = 0 // so transport is tempted to sniff it
-	req.Header.Set("Expect", "100-continue")
-	res, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
 }

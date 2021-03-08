@@ -7,8 +7,9 @@
 package http2
 
 import (
-	"net/http/httptrace"
 	"net/textproto"
+
+	"github.com/SandwichDev/http/http/httptrace"
 )
 
 func traceHasWroteHeaderField(trace *httptrace.ClientTrace) bool {

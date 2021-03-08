@@ -36,7 +36,6 @@ import (
 	"log"
 	"math"
 	"net"
-	"net/http"
 	"net/textproto"
 	"net/url"
 	"os"
@@ -46,6 +45,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SandwichDev/http/http"
 
 	"github.com/SandwichDev/net/http/httpguts"
 	"github.com/SandwichDev/net/http2/hpack"
@@ -761,7 +762,6 @@ func (sc *serverConn) readFrames() {
 
 // frameWriteResult is the message passed from writeFrameAsync to the serve goroutine.
 type frameWriteResult struct {
-	_   incomparable
 	wr  FrameWriteRequest // what was written (or attempted)
 	err error             // result of the writeFrame call
 }
@@ -772,7 +772,7 @@ type frameWriteResult struct {
 // serverConn.
 func (sc *serverConn) writeFrameAsync(wr FrameWriteRequest) {
 	err := wr.write.writeFrame(sc)
-	sc.wroteFrameCh <- frameWriteResult{wr: wr, err: err}
+	sc.wroteFrameCh <- frameWriteResult{wr, err}
 }
 
 func (sc *serverConn) closeAllStreamsOnConnClose() {
@@ -1162,7 +1162,7 @@ func (sc *serverConn) startFrameWrite(wr FrameWriteRequest) {
 	if wr.write.staysWithinBuffer(sc.bw.Available()) {
 		sc.writingFrameAsync = false
 		err := wr.write.writeFrame(sc)
-		sc.wroteFrame(frameWriteResult{wr: wr, err: err})
+		sc.wroteFrame(frameWriteResult{wr, err})
 	} else {
 		sc.writingFrameAsync = true
 		go sc.writeFrameAsync(wr)
@@ -1420,7 +1420,7 @@ func (sc *serverConn) processFrame(f Frame) error {
 		return sc.processPriority(f)
 	case *GoAwayFrame:
 		return sc.processGoAway(f)
-	case *PushPromiseFrame:
+	case *MetaPushPromiseFrame:
 		// A client cannot push. Thus, servers MUST treat the receipt of a PUSH_PROMISE
 		// frame as a connection error (Section 5.4.1) of type PROTOCOL_ERROR.
 		return ConnectionError(ErrCodeProtocol)
@@ -1694,7 +1694,6 @@ func (sc *serverConn) processData(f *DataFrame) error {
 		if len(data) > 0 {
 			wrote, err := st.body.Write(data)
 			if err != nil {
-				sc.sendWindowUpdate(nil, int(f.Length)-wrote)
 				return streamError(id, ErrCodeStreamClosed)
 			}
 			if wrote != len(data) {
@@ -2021,11 +2020,7 @@ func (sc *serverConn) newWriterAndRequest(st *stream, f *MetaHeadersFrame) (*res
 	}
 	if bodyOpen {
 		if vv, ok := rp.header["Content-Length"]; ok {
-			if cl, err := strconv.ParseUint(vv[0], 10, 63); err == nil {
-				req.ContentLength = int64(cl)
-			} else {
-				req.ContentLength = 0
-			}
+			req.ContentLength, _ = strconv.ParseInt(vv[0], 10, 64)
 		} else {
 			req.ContentLength = -1
 		}
@@ -2063,7 +2058,7 @@ func (sc *serverConn) newWriterAndRequestNoBody(st *stream, rp requestParam) (*r
 	var trailer http.Header
 	for _, v := range rp.header["Trailer"] {
 		for _, key := range strings.Split(v, ",") {
-			key = http.CanonicalHeaderKey(textproto.TrimString(key))
+			key = http.CanonicalHeaderKey(strings.TrimSpace(key))
 			switch key {
 			case "Transfer-Encoding", "Trailer", "Content-Length":
 				// Bogus. (copy of http1 rules)
@@ -2281,7 +2276,6 @@ func (sc *serverConn) sendWindowUpdate32(st *stream, n int32) {
 // requestBody is the Handler's Request.Body type.
 // Read and Close may be called concurrently.
 type requestBody struct {
-	_             incomparable
 	stream        *stream
 	conn          *serverConn
 	closed        bool  // for use by Close only
@@ -2408,8 +2402,9 @@ func (rws *responseWriterState) writeChunk(p []byte) (n int, err error) {
 		var ctype, clen string
 		if clen = rws.snapHeader.Get("Content-Length"); clen != "" {
 			rws.snapHeader.Del("Content-Length")
-			if cl, err := strconv.ParseUint(clen, 10, 63); err == nil {
-				rws.sentContentLen = int64(cl)
+			clen64, err := strconv.ParseInt(clen, 10, 64)
+			if err == nil && clen64 >= 0 {
+				rws.sentContentLen = clen64
 			} else {
 				clen = ""
 			}
@@ -2769,14 +2764,9 @@ func (w *responseWriter) Push(target string, opts *http.PushOptions) error {
 		if strings.HasPrefix(k, ":") {
 			return fmt.Errorf("promised request headers cannot include pseudo header %q", k)
 		}
-		// These headers are meaningful only if the request has a body,
-		// but PUSH_PROMISE requests cannot have a body.
-		// http://tools.ietf.org/html/rfc7540#section-8.2
-		// Also disallow Host, since the promised URL must be absolute.
-		switch strings.ToLower(k) {
-		case "content-length", "content-encoding", "trailer", "te", "expect", "host":
-			return fmt.Errorf("promised request headers cannot include %q", k)
-		}
+	}
+	if err := checkValidPushPromiseRequestHeaders(opts.Header); err != nil {
+		return err
 	}
 	if err := checkValidHTTP2RequestHeaders(opts.Header); err != nil {
 		return err
@@ -2944,6 +2934,28 @@ func checkValidHTTP2RequestHeaders(h http.Header) error {
 	if len(te) > 0 && (len(te) > 1 || (te[0] != "trailers" && te[0] != "")) {
 		return errors.New(`request header "TE" may only be "trailers" in HTTP/2`)
 	}
+	return nil
+}
+
+var bodyRequestHeaders = []string{
+	"Content-Encoding",
+	"Content-Length",
+	"Expect",
+	"Te",
+	"Trailer",
+}
+
+func checkValidPushPromiseRequestHeaders(h http.Header) error {
+	// PUSH_PROMISE requests cannot have a body
+	// http://tools.ietf.org/html/rfc7540#section-8.2
+	for _, k := range bodyRequestHeaders {
+		if _, ok := h[k]; ok {
+			return fmt.Errorf("promised request cannot include body related header %q", k)
+		}
+	}
+	// if _, ok := h["Host"]; ok {
+	// 	return fmt.Errorf(`promised URL must be absolute so "Host" header disallowed`)
+	// }
 	return nil
 }
 

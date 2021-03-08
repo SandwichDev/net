@@ -9,8 +9,9 @@ import (
 	"bytes"
 	"fmt"
 	"log"
-	"net/http"
 	"testing"
+
+	"github.com/SandwichDev/http/http"
 
 	"github.com/SandwichDev/net/http2"
 )

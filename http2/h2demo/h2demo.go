@@ -17,7 +17,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
-	"net/http"
 	"path"
 	"regexp"
 	"runtime"
@@ -25,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SandwichDev/http/http"
 
 	"cloud.google.com/go/storage"
 	"github.com/SandwichDev/net/http2"
@@ -79,7 +80,7 @@ href="https://http2.github.io/">HTTP/2</a> demo & interop server.</p>
 <p>This server exists for others in the HTTP/2 community to test their HTTP/2 client implementations and point out flaws in our server.</p>
 
 <p>
-The code is at <a href="https://github.com/SandwichDev/net/http2">github.com/SandwichDev/net/http2</a> and
+The code is at <a href="https://golang.org/x/net/http2">golang.org/x/net/http2</a> and
 is used transparently by the Go standard library from Go 1.6 and later.
 </p>
 
@@ -323,7 +324,7 @@ func newPushHandler() http.Handler {
 }
 
 func newGopherTilesHandler() http.Handler {
-	const gopherURL = "https://blog.golang.org/2years/2years-gophers.jpg"
+	const gopherURL = "https://blog.golang.org/go-programming-language-turns-two_gophers.jpg"
 	res, err := http.Get(gopherURL)
 	if err != nil {
 		log.Fatal(err)

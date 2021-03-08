@@ -8,8 +8,9 @@ import (
 	"bytes"
 	"fmt"
 	"log"
-	"net/http"
 	"net/url"
+
+	"github.com/SandwichDev/http/http"
 
 	"github.com/SandwichDev/net/http/httpguts"
 	"github.com/SandwichDev/net/http2/hpack"

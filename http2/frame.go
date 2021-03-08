@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -89,6 +90,7 @@ const (
 	// Continuation Frame
 	FlagContinuationEndHeaders Flags = 0x4
 
+	// PushPromise Frame
 	FlagPushPromiseEndHeaders Flags = 0x4
 	FlagPushPromisePadded     Flags = 0x8
 )
@@ -268,7 +270,7 @@ type Framer struct {
 	errDetail error
 
 	// lastHeaderStream is non-zero if the last frame was an
-	// unfinished HEADERS/CONTINUATION.
+	// unfinished HEADERS/PUSH_PROMISE/CONTINUATION.
 	lastHeaderStream uint32
 
 	maxReadSize uint32
@@ -300,9 +302,10 @@ type Framer struct {
 	// It is not compatible with ReadMetaHeaders.
 	AllowIllegalReads bool
 
-	// ReadMetaHeaders if non-nil causes ReadFrame to merge
-	// HEADERS and CONTINUATION frames together and return
-	// MetaHeadersFrame instead.
+	// ReadMetaHeaders if non-nil causes ReadFrame to merge:
+	// HEADERS      + CONTINUATIONs -> MetaHeadersFrame
+	// PUSH_PROMISE + CONTINUATIONs -> MetaPushPromiseFrame
+	// and return the meta frame instead.
 	ReadMetaHeaders *hpack.Decoder
 
 	// MaxHeaderListSize is the http2 MAX_HEADER_LIST_SIZE.
@@ -323,8 +326,8 @@ type Framer struct {
 	debugFramerBuf    *bytes.Buffer
 	debugReadLoggerf  func(string, ...interface{})
 	debugWriteLoggerf func(string, ...interface{})
-
-	frameCache *frameCache // nil if frames aren't reused (default)
+	debugCountBytes   func(uint8, uint)
+	frameCache        *frameCache // nil if frames aren't reused (default)
 }
 
 func (fr *Framer) maxHeaderListSize() uint32 {
@@ -363,6 +366,7 @@ func (f *Framer) endWrite() error {
 		f.logWrite()
 	}
 
+	f.debugCountBytes(1, uint(len(f.wbuf)))
 	n, err := f.w.Write(f.wbuf)
 	if err == nil && n != len(f.wbuf) {
 		err = io.ErrShortWrite
@@ -430,6 +434,7 @@ func NewFramer(w io.Writer, r io.Reader) *Framer {
 		logWrites:         logFrameWrites,
 		debugReadLoggerf:  log.Printf,
 		debugWriteLoggerf: log.Printf,
+		debugCountBytes:   func(_ uint8, __ uint) {},
 	}
 	fr.getReadBuf = func(size uint32) []byte {
 		if cap(fr.readBuf) >= int(size) {
@@ -513,8 +518,8 @@ func (fr *Framer) ReadFrame() (Frame, error) {
 	if fr.logReads {
 		fr.debugReadLoggerf("http2: Framer %p: read %v", fr, summarizeFrame(f))
 	}
-	if fh.Type == FrameHeaders && fr.ReadMetaHeaders != nil {
-		return fr.readMetaFrame(f.(*HeadersFrame))
+	if (fh.Type == FrameHeaders || fh.Type == FramePushPromise) && fr.ReadMetaHeaders != nil {
+		return fr.readMetaFrame(f.(continuable))
 	}
 	return f, nil
 }
@@ -529,7 +534,7 @@ func (fr *Framer) connError(code ErrCode, reason string) error {
 }
 
 // checkFrameOrder reports an error if f is an invalid frame to return
-// next from ReadFrame. Mostly it checks whether HEADERS and
+// next from ReadFrame. Mostly it checks whether HEADERS/PUSH_PROMISE and
 // CONTINUATION frames are contiguous.
 func (fr *Framer) checkFrameOrder(f Frame) error {
 	last := fr.lastFrame
@@ -556,7 +561,7 @@ func (fr *Framer) checkFrameOrder(f Frame) error {
 	}
 
 	switch fh.Type {
-	case FrameHeaders, FrameContinuation:
+	case FrameHeaders, FramePushPromise, FrameContinuation:
 		if fh.Flags.Has(FlagHeadersEndHeaders) {
 			fr.lastHeaderStream = 0
 		} else {
@@ -804,6 +809,9 @@ func (f *SettingsFrame) ForeachSetting(fn func(Setting) error) error {
 // It will perform exactly one Write to the underlying Writer.
 // It is the caller's responsibility to not call other Write methods concurrently.
 func (f *Framer) WriteSettings(settings ...Setting) error {
+	if false {
+		debug.PrintStack()
+	}
 	f.startWrite(FrameSettings, 0, 0)
 	for _, s := range settings {
 		f.writeUint16(uint16(s.ID))
@@ -951,6 +959,10 @@ func parseWindowUpdateFrame(_ *frameCache, fh FrameHeader, p []byte) (Frame, err
 // If the Stream ID is zero, the window update applies to the
 // connection as a whole.
 func (f *Framer) WriteWindowUpdate(streamID, incr uint32) error {
+	if false {
+		debug.PrintStack()
+	}
+
 	// "The legal range for the increment to the flow control window is 1 to 2^31-1 (2,147,483,647) octets."
 	if (incr < 1 || incr > 2147483647) && !f.AllowIllegalWrites {
 		return errors.New("illegal window increment value")
@@ -974,6 +986,10 @@ type HeadersFrame struct {
 func (f *HeadersFrame) HeaderBlockFragment() []byte {
 	f.checkValid()
 	return f.headerFragBuf
+}
+
+func (f *HeadersFrame) clearHeaderBlockFragment() {
+	f.headerFragBuf = nil
 }
 
 func (f *HeadersFrame) HeadersEnded() bool {
@@ -1187,6 +1203,10 @@ func parseRSTStreamFrame(_ *frameCache, fh FrameHeader, p []byte) (Frame, error)
 // It will perform exactly one Write to the underlying Writer.
 // It is the caller's responsibility to not call other Write methods concurrently.
 func (f *Framer) WriteRSTStream(streamID uint32, code ErrCode) error {
+	if false {
+		debug.PrintStack()
+	}
+
 	if !validStreamID(streamID) && !f.AllowIllegalWrites {
 		return errStreamID
 	}
@@ -1212,6 +1232,10 @@ func parseContinuationFrame(_ *frameCache, fh FrameHeader, p []byte) (Frame, err
 func (f *ContinuationFrame) HeaderBlockFragment() []byte {
 	f.checkValid()
 	return f.headerFragBuf
+}
+
+func (f *ContinuationFrame) clearHeaderBlockFragment() {
+	f.headerFragBuf = nil
 }
 
 func (f *ContinuationFrame) HeadersEnded() bool {
@@ -1248,6 +1272,10 @@ func (f *PushPromiseFrame) HeaderBlockFragment() []byte {
 	return f.headerFragBuf
 }
 
+func (f *PushPromiseFrame) clearHeaderBlockFragment() {
+	f.headerFragBuf = nil
+}
+
 func (f *PushPromiseFrame) HeadersEnded() bool {
 	return f.FrameHeader.Flags.Has(FlagPushPromiseEndHeaders)
 }
@@ -1263,7 +1291,7 @@ func parsePushPromise(_ *frameCache, fh FrameHeader, p []byte) (_ Frame, err err
 		// with. If the stream identifier field specifies the value
 		// 0x0, a recipient MUST respond with a connection error
 		// (Section 5.4.1) of type PROTOCOL_ERROR.
-		return nil, ConnectionError(ErrCodeProtocol)
+		return nil, connError{ErrCodeProtocol, "PUSH_PROMISE frame with stream ID 0"}
 	}
 	// The PUSH_PROMISE frame includes optional padding.
 	// Padding fields and flags are identical to those defined for DATA frames
@@ -1371,9 +1399,54 @@ type headersEnder interface {
 	HeadersEnded() bool
 }
 
-type headersOrContinuation interface {
+type continuable interface {
+	Frame
 	headersEnder
 	HeaderBlockFragment() []byte
+	clearHeaderBlockFragment()
+}
+
+type metaFrame struct {
+	Fields    []hpack.HeaderField
+	Truncated bool
+}
+
+// pseudoFields returns the pseudo header fields of mf.
+// The caller does not own the returned slice.
+func (mf *metaFrame) pseudoFields() []hpack.HeaderField {
+	for i, hf := range mf.Fields {
+		if !hf.IsPseudo() {
+			return mf.Fields[:i]
+		}
+	}
+	return mf.Fields
+}
+
+func (mf *metaFrame) checkPseudos() error {
+	var isRequest, isResponse bool
+	pf := mf.pseudoFields()
+	for i, hf := range pf {
+		switch hf.Name {
+		case ":method", ":path", ":scheme", ":authority":
+			isRequest = true
+		case ":status":
+			isResponse = true
+		default:
+			return pseudoHeaderError(hf.Name)
+		}
+		// Check for duplicates.
+		// This would be a bad algorithm, but N is 4.
+		// And this doesn't allocate.
+		for _, hf2 := range pf[:i] {
+			if hf.Name == hf2.Name {
+				return duplicatePseudoHeaderError(hf.Name)
+			}
+		}
+	}
+	if isRequest && isResponse {
+		return errMixPseudoHeaderTypes
+	}
+	return nil
 }
 
 // A MetaHeadersFrame is the representation of one HEADERS frame and
@@ -1394,7 +1467,7 @@ type MetaHeadersFrame struct {
 	// not have unknown pseudo header fields or invalid header
 	// field names or values. Required pseudo header fields may be
 	// missing, however. Use the MetaHeadersFrame.Pseudo accessor
-	// method access pseudo headers.
+	// method to access pseudo headers.
 	Fields []hpack.HeaderField
 
 	// Truncated is whether the max header list size limit was hit
@@ -1439,31 +1512,67 @@ func (mh *MetaHeadersFrame) PseudoFields() []hpack.HeaderField {
 	return mh.Fields
 }
 
-func (mh *MetaHeadersFrame) checkPseudos() error {
-	var isRequest, isResponse bool
-	pf := mh.PseudoFields()
-	for i, hf := range pf {
-		switch hf.Name {
-		case ":method", ":path", ":scheme", ":authority":
-			isRequest = true
-		case ":status":
-			isResponse = true
-		default:
-			return pseudoHeaderError(hf.Name)
+// A MetaPushPromiseFrame is the representation of one PUSH_PROMISE frame and
+// zero or more contiguous CONTINUATION frames and the decoding of
+// their HPACK-encoded contents.
+//
+// This type of frame does not appear on the wire and is only returned
+// by the Framer when Framer.ReadMetaHeaders is set.
+type MetaPushPromiseFrame struct {
+	*PushPromiseFrame
+
+	// Fields are the fields contained in the PUSH_PROMISE and
+	// CONTINUATION frames. The underlying slice is owned by the
+	// Framer and must not be retained after the next call to
+	// ReadFrame.
+	//
+	// Fields are guaranteed to be in the correct http2 order and
+	// not have unknown pseudo header fields or invalid header
+	// field names or values. Required pseudo header fields may be
+	// missing, however. Use the MetaPushPromiseFrame.Pseudo accessor
+	// method to access pseudo headers.
+	Fields []hpack.HeaderField
+
+	// Truncated is whether the max header list size limit was hit
+	// and Fields is incomplete. The hpack decoder state is still
+	// valid, however.
+	Truncated bool
+}
+
+// PseudoValue returns the given pseudo header field's value.
+// The provided pseudo field should not contain the leading colon.
+func (mp *MetaPushPromiseFrame) PseudoValue(pseudo string) string {
+	for _, hf := range mp.Fields {
+		if !hf.IsPseudo() {
+			return ""
 		}
-		// Check for duplicates.
-		// This would be a bad algorithm, but N is 4.
-		// And this doesn't allocate.
-		for _, hf2 := range pf[:i] {
-			if hf.Name == hf2.Name {
-				return duplicatePseudoHeaderError(hf.Name)
-			}
+		if hf.Name[1:] == pseudo {
+			return hf.Value
 		}
 	}
-	if isRequest && isResponse {
-		return errMixPseudoHeaderTypes
+	return ""
+}
+
+// RegularFields returns the regular (non-pseudo) header fields of mp.
+// The caller does not own the returned slice.
+func (mp *MetaPushPromiseFrame) RegularFields() []hpack.HeaderField {
+	for i, hf := range mp.Fields {
+		if !hf.IsPseudo() {
+			return mp.Fields[i:]
+		}
 	}
 	return nil
+}
+
+// PseudoFields returns the pseudo header fields of mp.
+// The caller does not own the returned slice.
+func (mp *MetaPushPromiseFrame) PseudoFields() []hpack.HeaderField {
+	for i, hf := range mp.Fields {
+		if !hf.IsPseudo() {
+			return mp.Fields[:i]
+		}
+	}
+	return mp.Fields
 }
 
 func (fr *Framer) maxHeaderStringLen() int {
@@ -1477,15 +1586,13 @@ func (fr *Framer) maxHeaderStringLen() int {
 }
 
 // readMetaFrame returns 0 or more CONTINUATION frames from fr and
-// merge them into the provided hf and returns a MetaHeadersFrame
-// with the decoded hpack values.
-func (fr *Framer) readMetaFrame(hf *HeadersFrame) (*MetaHeadersFrame, error) {
+// merges them into a Frame with the decoded hpack values.
+func (fr *Framer) readMetaFrame(cont continuable) (Frame, error) {
 	if fr.AllowIllegalReads {
-		return nil, errors.New("illegal use of AllowIllegalReads with ReadMetaHeaders")
+		return nil, errors.New("illegal use of AllowIllegalReads")
 	}
-	mh := &MetaHeadersFrame{
-		HeadersFrame: hf,
-	}
+	mf := &metaFrame{}
+
 	var remainSize = fr.maxHeaderListSize()
 	var sawRegular bool
 
@@ -1520,17 +1627,17 @@ func (fr *Framer) readMetaFrame(hf *HeadersFrame) (*MetaHeadersFrame, error) {
 		size := hf.Size()
 		if size > remainSize {
 			hdec.SetEmitEnabled(false)
-			mh.Truncated = true
+			mf.Truncated = true
 			return
 		}
 		remainSize -= size
 
-		mh.Fields = append(mh.Fields, hf)
+		mf.Fields = append(mf.Fields, hf)
 	})
-	// Lose reference to MetaHeadersFrame:
+	// Lose reference to metaFrame:
 	defer hdec.SetEmitFunc(func(hf hpack.HeaderField) {})
 
-	var hc headersOrContinuation = hf
+	var hc = cont
 	for {
 		frag := hc.HeaderBlockFragment()
 		if _, err := hdec.Write(frag); err != nil {
@@ -1547,8 +1654,8 @@ func (fr *Framer) readMetaFrame(hf *HeadersFrame) (*MetaHeadersFrame, error) {
 		}
 	}
 
-	mh.HeadersFrame.headerFragBuf = nil
-	mh.HeadersFrame.invalidate()
+	cont.clearHeaderBlockFragment()
+	cont.invalidate()
 
 	if err := hdec.Close(); err != nil {
 		return nil, ConnectionError(ErrCodeCompression)
@@ -1558,16 +1665,26 @@ func (fr *Framer) readMetaFrame(hf *HeadersFrame) (*MetaHeadersFrame, error) {
 		if VerboseLogs {
 			log.Printf("http2: invalid header: %v", invalid)
 		}
-		return nil, StreamError{mh.StreamID, ErrCodeProtocol, invalid}
+		return nil, StreamError{cont.Header().StreamID, ErrCodeProtocol, invalid}
 	}
-	if err := mh.checkPseudos(); err != nil {
+	if err := mf.checkPseudos(); err != nil {
 		fr.errDetail = err
 		if VerboseLogs {
 			log.Printf("http2: invalid pseudo headers: %v", err)
 		}
-		return nil, StreamError{mh.StreamID, ErrCodeProtocol, err}
+		return nil, StreamError{cont.Header().StreamID, ErrCodeProtocol, err}
 	}
-	return mh, nil
+
+	var f Frame
+	switch orig := cont.(type) {
+	case *HeadersFrame:
+		f = &MetaHeadersFrame{HeadersFrame: orig, Fields: mf.Fields, Truncated: mf.Truncated}
+	case *PushPromiseFrame:
+		f = &MetaPushPromiseFrame{PushPromiseFrame: orig, Fields: mf.Fields, Truncated: mf.Truncated}
+	default:
+		panic("frame type not supported as meta frame")
+	}
+	return f, nil
 }
 
 func summarizeFrame(f Frame) string {
@@ -1609,6 +1726,8 @@ func summarizeFrame(f Frame) string {
 			f.LastStreamID, f.ErrCode, f.debugData)
 	case *RSTStreamFrame:
 		fmt.Fprintf(&buf, " ErrCode=%v", f.ErrCode)
+	case *MetaPushPromiseFrame:
+		fmt.Fprintf(&buf, " PromiseID=%v", f.PromiseID)
 	}
 	return buf.String()
 }

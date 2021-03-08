@@ -9,12 +9,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SandwichDev/http/http"
 
 	"github.com/SandwichDev/net/http2/hpack"
 )

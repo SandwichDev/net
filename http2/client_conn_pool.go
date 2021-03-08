@@ -8,14 +8,19 @@ package http2
 
 import (
 	"crypto/tls"
-	"net/http"
+	"os"
 	"sync"
+
+	"github.com/SandwichDev/http/http"
+	// "log"
+	// "runtime/debug"
 )
 
 // ClientConnPool manages a pool of HTTP/2 client connections.
 type ClientConnPool interface {
 	GetClientConn(req *http.Request, addr string) (*ClientConn, error)
 	MarkDead(*ClientConn)
+	CloseAll()
 }
 
 // clientConnPoolIdleCloser is the interface implemented by ClientConnPool
@@ -41,6 +46,25 @@ type clientConnPool struct {
 	dialing      map[string]*dialCall     // currently in-flight dials
 	keys         map[*ClientConn][]string
 	addConnCalls map[string]*addConnCall // in-flight addConnIfNeede calls
+}
+
+func (p *clientConnPool) CloseAll() {
+	p.mu.Lock()
+	defer func() {
+		p.mu.Unlock()
+		// p.closeIdleConnections()
+	}()
+	for _, conns := range p.conns {
+		for _, conn := range conns[:] {
+			p.mu.Unlock()
+			p.MarkDead(conn)
+			p.mu.Lock()
+			if conn != nil {
+
+				conn.Close()
+			}
+		}
+	}
 }
 
 func (p *clientConnPool) GetClientConn(req *http.Request, addr string) (*ClientConn, error) {
@@ -107,7 +131,6 @@ func (p *clientConnPool) getClientConn(req *http.Request, addr string, dialOnMis
 
 // dialCall is an in-flight Transport dial call to a host.
 type dialCall struct {
-	_    incomparable
 	p    *clientConnPool
 	done chan struct{} // closed when done
 	res  *ClientConn   // valid after done is closed
@@ -116,6 +139,9 @@ type dialCall struct {
 
 // requires p.mu is held.
 func (p *clientConnPool) getStartDialLocked(addr string) *dialCall {
+	if os.Getenv("DEBUG") != "" {
+		// debug.PrintStack()2
+	}
 	if call, ok := p.dialing[addr]; ok {
 		// A dial is already in-flight. Don't start another.
 		return call
@@ -181,7 +207,6 @@ func (p *clientConnPool) addConnIfNeeded(key string, t *Transport, c *tls.Conn) 
 }
 
 type addConnCall struct {
-	_    incomparable
 	p    *clientConnPool
 	done chan struct{} // closed when done
 	err  error
@@ -200,6 +225,12 @@ func (c *addConnCall) run(t *Transport, key string, tc *tls.Conn) {
 	delete(p.addConnCalls, key)
 	p.mu.Unlock()
 	close(c.done)
+}
+
+func (p *clientConnPool) addConn(key string, cc *ClientConn) {
+	p.mu.Lock()
+	p.addConnLocked(key, cc)
+	p.mu.Unlock()
 }
 
 // p.mu must be held
