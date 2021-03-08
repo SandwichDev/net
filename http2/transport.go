@@ -1667,9 +1667,6 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 				}
 			}
 		}
-		if shouldSendReqContentLength(req.Method, contentLength) {
-			f("content-length", strconv.FormatInt(contentLength, 10))
-		}
 		if addGzipHeader {
 			f("accept-encoding", "gzip")
 		}
@@ -1682,6 +1679,10 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 			}
 			f("te", "trailers")
 
+		}
+		if shouldSendReqContentLength(req.Method, contentLength) {
+			fmt.Println("Setting Content Length?")
+			f("content-length", strconv.FormatInt(contentLength, 10))
 		}
 	}
 
