@@ -1548,7 +1548,11 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 		if m == "" {
 			m = http.MethodGet
 		}
-
+		fmt.Println("Checking Content Length")
+		if shouldSendReqContentLength(req.Method, contentLength) {
+			fmt.Println("Setting Content Length?")
+			f("content-length", strconv.FormatInt(contentLength, 10))
+		}
 		// chrome
 		ffFp := os.Getenv("FF_FP") == "1"
 		if ffFp {
@@ -1680,11 +1684,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 			f("te", "trailers")
 
 		}
-		fmt.Println("Checking Content Length")
-		if shouldSendReqContentLength(req.Method, contentLength) {
-			fmt.Println("Setting Content Length?")
-			f("content-length", strconv.FormatInt(contentLength, 10))
-		}
+
 	}
 
 	// Do a first pass over the headers counting bytes to ensure
