@@ -1576,9 +1576,12 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 				// 	continue
 				// }
 				v := kk[1]
-				if strings.EqualFold(k, "user-agent") {
+				if strings.EqualFold(k, "host") || strings.EqualFold(k, "content-length") {
+					continue
+				} else if strings.EqualFold(k, "user-agent") {
 					didUA = true
 				}
+
 				f(k, v)
 			}
 			// use req header for cookies
