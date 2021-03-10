@@ -1566,6 +1566,9 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 				f("trailer", trailers)
 			}
 		}
+		if shouldSendReqContentLength(req.Method, contentLength) {
+			f("content-length", strconv.FormatInt(contentLength, 10))
+		}
 		var didUA = false
 		var hasUir = false
 		if len(req.RawHeader) > 0 {
@@ -1576,9 +1579,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 				// 	continue
 				// }
 				v := kk[1]
-				if strings.EqualFold(k, "host") || strings.EqualFold(k, "content-length") {
-					continue
-				} else if strings.EqualFold(k, "user-agent") {
+				if strings.EqualFold(k, "user-agent") {
 					didUA = true
 				}
 
@@ -1668,10 +1669,6 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 					f(k, v)
 				}
 			}
-		}
-		if shouldSendReqContentLength(req.Method, contentLength) {
-			fmt.Println("Setting Content Length?")
-			f("content-length", strconv.FormatInt(contentLength, 10))
 		}
 
 		if addGzipHeader {
