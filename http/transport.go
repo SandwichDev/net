@@ -2242,7 +2242,7 @@ func DecompressBody(response *Response) io.ReadCloser {
 	case "deflate":
 
 	}
-
+	fmt.Println("Returning default body")
 	return response.Body
 }
 

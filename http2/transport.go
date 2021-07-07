@@ -2085,6 +2085,7 @@ func (rl *clientConnReadLoop) handleResponse(cs *clientStream, f *MetaHeadersFra
 	go cs.awaitRequestCancel(cs.req)
 
 	// Removed cs.requestedGzip to automatically handle gzip no matter the scenario
+	fmt.Println(res.Header.Get("Content-Encoding"))
 	if res.Header.Get("Content-Encoding") == "gzip" || res.Header.Get("Content-Encoding") == "deflate" || res.Header.Get("Content-Encoding") == "br" {
 		res.Header.Del("Content-Encoding")
 		res.Header.Del("Content-Length")
