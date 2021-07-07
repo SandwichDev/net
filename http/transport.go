@@ -2230,6 +2230,7 @@ func (pc *persistConn) readLoop() {
 }
 
 func DecompressBody(response *Response) io.ReadCloser {
+	fmt.Print(response)
 	fmt.Println(response.Header.Get("Content-Encoding"))
 	switch response.Header.Get("Content-Encoding") {
 	case "gzip":
