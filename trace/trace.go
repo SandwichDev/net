@@ -60,7 +60,7 @@ The /debug/events HTTP endpoint organizes the event logs by family and
 by time since the last error.  The expanded view displays recent log
 entries and the log's call stack.
 */
-package trace // import "github.com/SandwichDev/net/trace"
+package trace // import "golang.org/x/net/trace"
 
 import (
 	"bytes"
@@ -70,14 +70,16 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
-	"net/url"
 	"runtime"
 	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http"
 
 	"github.com/SandwichDev/net/internal/timeseries"
 )
@@ -122,7 +124,7 @@ func init() {
 	if pat == debugRequestsPath {
 		panic("/debug/requests is already registered. You may have two independent copies of " +
 			"github.com/SandwichDev/net/trace in your binary, trying to maintain separate state. This may " +
-			"involve a vendored copy of github.com/SandwichDev/net/trace.")
+			"involve a vendored copy of golang.org/x/net/trace.")
 	}
 
 	// TODO(jbd): Serve Traces from /debug/traces in the future?
@@ -281,7 +283,7 @@ func Render(w io.Writer, req *http.Request, sensitive bool) {
 	completedMu.RLock()
 	defer completedMu.RUnlock()
 	if err := pageTmpl().ExecuteTemplate(w, "Page", data); err != nil {
-		log.Printf("net/trace: Failed executing template: %v", err)
+		log.Printf("github.com/SandwichDev/net/trace: Failed executing template: %v", err)
 	}
 }
 
@@ -311,7 +313,7 @@ func lookupBucket(fam string, b int) *traceBucket {
 
 type contextKeyT string
 
-var contextKey = contextKeyT("github.com/SandwichDev/net/trace.Trace")
+var contextKey = contextKeyT("golang.org/x/net/trace.Trace")
 
 // Trace represents an active request.
 type Trace interface {
@@ -777,7 +779,7 @@ func (tr *trace) addEvent(x interface{}, recyclable, sensitive bool) {
 	if DebugUseAfterFinish && tr.finishStack != nil {
 		buf := make([]byte, 4<<10) // 4 KB should be enough
 		n := runtime.Stack(buf, false)
-		log.Printf("net/trace: trace used after finish:\nFinished at:\n%s\nUsed at:\n%s", tr.finishStack, buf[:n])
+		log.Printf("github.com/SandwichDev/net/trace: trace used after finish:\nFinished at:\n%s\nUsed at:\n%s", tr.finishStack, buf[:n])
 	}
 
 	/*

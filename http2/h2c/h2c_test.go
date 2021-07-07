@@ -11,7 +11,7 @@ import (
 	"log"
 	"testing"
 
-	"github.com/SandwichDev/http/http"
+	"github.com/SandwichDev/net/http"
 
 	"github.com/SandwichDev/net/http2"
 )

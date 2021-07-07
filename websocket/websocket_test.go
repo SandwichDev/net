@@ -11,15 +11,18 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"reflect"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http/httptest"
+
+	"github.com/SandwichDev/net/http"
 )
 
 var serverAddr string

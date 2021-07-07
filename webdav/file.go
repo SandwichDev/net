@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/xml"
 	"io"
-	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SandwichDev/net/http"
 )
 
 // slashClean is equivalent to but slightly more efficient than

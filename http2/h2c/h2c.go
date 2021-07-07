@@ -18,11 +18,12 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/textproto"
 	"os"
 	"strings"
 
-	"github.com/SandwichDev/http/http"
+	"github.com/SandwichDev/net/textproto"
+
+	"github.com/SandwichDev/net/http"
 
 	"github.com/SandwichDev/net/http/httpguts"
 	"github.com/SandwichDev/net/http2"

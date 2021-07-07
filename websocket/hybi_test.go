@@ -9,10 +9,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http"
 )
 
 // Test the getNonceAccept function with values in

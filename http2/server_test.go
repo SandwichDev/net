@@ -28,8 +28,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SandwichDev/http/http"
-	"github.com/SandwichDev/http/http/httptest"
+	"github.com/SandwichDev/net/http/httptest"
+
+	"github.com/SandwichDev/net/http"
 
 	"github.com/SandwichDev/net/http2/hpack"
 )
@@ -1190,10 +1191,9 @@ func TestServer_MaxQueuedControlFrames(t *testing.T) {
 }
 
 func TestServer_RejectsLargeFrames(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("see golang.org/issue/13434")
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" || runtime.GOOS == "zos" {
+		t.Skip("see golang.org/issue/13434, golang.org/issue/37321")
 	}
-
 	st := newServerTester(t, nil)
 	defer st.Close()
 	st.greet()
@@ -1641,9 +1641,8 @@ func TestServer_Rejects_PrioritySelfDependence(t *testing.T) {
 func TestServer_Rejects_PushPromise(t *testing.T) {
 	testServerRejectsConn(t, func(st *serverTester) {
 		pp := PushPromiseParam{
-			StreamID:   1,
-			PromiseID:  3,
-			EndHeaders: true,
+			StreamID:  1,
+			PromiseID: 3,
 		}
 		if err := st.fr.WritePushPromise(pp); err != nil {
 			t.Fatal(err)
@@ -1755,6 +1754,117 @@ func TestServer_Response_NoData_Header_FooBar(t *testing.T) {
 			t.Errorf("Got headers %v; want %v", goth, wanth)
 		}
 	})
+}
+
+// Reject content-length headers containing a sign.
+// See https://golang.org/issue/39017
+func TestServerIgnoresContentLengthSignWhenWritingChunks(t *testing.T) {
+	tests := []struct {
+		name   string
+		cl     string
+		wantCL string
+	}{
+		{
+			name:   "proper content-length",
+			cl:     "3",
+			wantCL: "3",
+		},
+		{
+			name:   "ignore cl with plus sign",
+			cl:     "+3",
+			wantCL: "0",
+		},
+		{
+			name:   "ignore cl with minus sign",
+			cl:     "-3",
+			wantCL: "0",
+		},
+		{
+			name:   "max int64, for safe uint64->int64 conversion",
+			cl:     "9223372036854775807",
+			wantCL: "9223372036854775807",
+		},
+		{
+			name:   "overflows int64, so ignored",
+			cl:     "9223372036854775808",
+			wantCL: "0",
+		},
+	}
+
+	for _, tt := range tests {
+		testServerResponse(t, func(w http.ResponseWriter, r *http.Request) error {
+			w.Header().Set("content-length", tt.cl)
+			return nil
+		}, func(st *serverTester) {
+			getSlash(st)
+			hf := st.wantHeaders()
+			goth := st.decodeHeader(hf.HeaderBlockFragment())
+			wanth := [][2]string{
+				{":status", "200"},
+				{"content-length", tt.wantCL},
+			}
+			if !reflect.DeepEqual(goth, wanth) {
+				t.Errorf("For case %q, value %q, got = %q; want %q", tt.name, tt.cl, goth, wanth)
+			}
+		})
+	}
+}
+
+// Reject content-length headers containing a sign.
+// See https://golang.org/issue/39017
+func TestServerRejectsContentLengthWithSignNewRequests(t *testing.T) {
+	tests := []struct {
+		name   string
+		cl     string
+		wantCL int64
+	}{
+		{
+			name:   "proper content-length",
+			cl:     "3",
+			wantCL: 3,
+		},
+		{
+			name:   "ignore cl with plus sign",
+			cl:     "+3",
+			wantCL: 0,
+		},
+		{
+			name:   "ignore cl with minus sign",
+			cl:     "-3",
+			wantCL: 0,
+		},
+		{
+			name:   "max int64, for safe uint64->int64 conversion",
+			cl:     "9223372036854775807",
+			wantCL: 9223372036854775807,
+		},
+		{
+			name:   "overflows int64, so ignored",
+			cl:     "9223372036854775808",
+			wantCL: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			writeReq := func(st *serverTester) {
+				st.writeHeaders(HeadersFrameParam{
+					StreamID:      1, // clients send odd numbers
+					BlockFragment: st.encodeHeader("content-length", tt.cl),
+					EndStream:     false,
+					EndHeaders:    true,
+				})
+				st.writeData(1, false, []byte(""))
+			}
+			checkReq := func(r *http.Request) {
+				if r.ContentLength != tt.wantCL {
+					t.Fatalf("Got: %q\nWant: %q", r.ContentLength, tt.wantCL)
+				}
+			}
+			testServerRequest(t, writeReq, checkReq)
+		})
+	}
 }
 
 func TestServer_Response_Data_Sniff_DoesntOverride(t *testing.T) {
@@ -3602,48 +3712,6 @@ func TestCheckValidHTTP2Request(t *testing.T) {
 	}
 }
 
-func TestCheckValidPushPromiseRequest(t *testing.T) {
-	tests := []struct {
-		h    http.Header
-		want error
-	}{
-		{
-			h:    http.Header{"Foo": {""}},
-			want: nil,
-		},
-		{
-			h:    http.Header{"Content-Encoding": {""}},
-			want: errors.New(`promised request cannot include body related header "Content-Encoding"`),
-		},
-		{
-			h:    http.Header{"Content-Length": {""}},
-			want: errors.New(`promised request cannot include body related header "Content-Length"`),
-		},
-		{
-			h:    http.Header{"Expect": {""}},
-			want: errors.New(`promised request cannot include body related header "Expect"`),
-		},
-		{
-			h:    http.Header{"Te": {""}},
-			want: errors.New(`promised request cannot include body related header "Te"`),
-		},
-		{
-			h:    http.Header{"Trailer": {""}},
-			want: errors.New(`promised request cannot include body related header "Trailer"`),
-		},
-		{
-			h:    http.Header{"Host": {""}},
-			want: errors.New(`promised URL must be absolute so "Host" header disallowed`),
-		},
-	}
-	for i, tt := range tests {
-		got := checkValidPushPromiseRequestHeaders(tt.h)
-		if !reflect.DeepEqual(got, tt.want) {
-			t.Errorf("%d. checkValidPushPromiseRequest = %v; want %v", i, got, tt.want)
-		}
-	}
-}
-
 // golang.org/issue/14030
 func TestExpect100ContinueAfterHandlerWrites(t *testing.T) {
 	const msg = "Hello"
@@ -4140,5 +4208,64 @@ func TestContentEncodingNoSniffing(t *testing.T) {
 				t.Errorf("Content-Type mismatch\n\tgot:  %q\n\twant: %q", g, w)
 			}
 		})
+	}
+}
+
+func TestServerWindowUpdateOnBodyClose(t *testing.T) {
+	const content = "12345678"
+	blockCh := make(chan bool)
+	errc := make(chan error, 1)
+	st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, 4)
+		n, err := io.ReadFull(r.Body, buf)
+		if err != nil {
+			errc <- err
+			return
+		}
+		if n != len(buf) {
+			errc <- fmt.Errorf("too few bytes read: %d", n)
+			return
+		}
+		blockCh <- true
+		<-blockCh
+		errc <- nil
+	})
+	defer st.Close()
+
+	st.greet()
+	st.writeHeaders(HeadersFrameParam{
+		StreamID: 1, // clients send odd numbers
+		BlockFragment: st.encodeHeader(
+			":method", "POST",
+			"content-length", strconv.Itoa(len(content)),
+		),
+		EndStream:  false, // to say DATA frames are coming
+		EndHeaders: true,
+	})
+	st.writeData(1, false, []byte(content[:5]))
+	<-blockCh
+	st.stream(1).body.CloseWithError(io.EOF)
+	st.writeData(1, false, []byte(content[5:]))
+	blockCh <- true
+
+	increments := len(content)
+	for {
+		f, err := st.readFrame()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wu, ok := f.(*WindowUpdateFrame); ok && wu.StreamID == 0 {
+			increments -= int(wu.Increment)
+			if increments == 0 {
+				break
+			}
+		}
+	}
+
+	if err := <-errc; err != nil {
+		t.Error(err)
 	}
 }

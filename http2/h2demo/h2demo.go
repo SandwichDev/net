@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SandwichDev/http/http"
+	"github.com/SandwichDev/net/http"
 
 	"cloud.google.com/go/storage"
 	"github.com/SandwichDev/net/http2"
@@ -324,7 +324,7 @@ func newPushHandler() http.Handler {
 }
 
 func newGopherTilesHandler() http.Handler {
-	const gopherURL = "https://blog.golang.org/go-programming-language-turns-two_gophers.jpg"
+	const gopherURL = "https://blog.golang.org/2years/2years-gophers.jpg"
 	res, err := http.Get(gopherURL)
 	if err != nil {
 		log.Fatal(err)

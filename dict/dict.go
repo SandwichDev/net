@@ -4,12 +4,13 @@
 
 // Package dict implements the Dictionary Server Protocol
 // as defined in RFC 2229.
-package dict // import "github.com/SandwichDev/net/dict"
+package dict // import "golang.org/x/net/dict"
 
 import (
-	"net/textproto"
 	"strconv"
 	"strings"
+
+	"github.com/SandwichDev/net/textproto"
 )
 
 // A Client represents a client connection to a dictionary server.

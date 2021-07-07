@@ -3,14 +3,16 @@
 // license that can be found in the LICENSE file.
 
 // Package ctxhttp provides helper functions for performing context-aware HTTP requests.
-package ctxhttp // import "github.com/SandwichDev/net/context/ctxhttp"
+package ctxhttp // import "golang.org/x/net/context/ctxhttp"
 
 import (
 	"context"
 	"io"
-	"net/http"
-	"net/url"
 	"strings"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http"
 )
 
 // Do sends an HTTP request with the provided http.Client and returns

@@ -79,4 +79,4 @@ This packet filter captures a random 1% sample of traffic.
 	})
 
 */
-package bpf // import "github.com/SandwichDev/net/bpf"
+package bpf // import "golang.org/x/net/bpf"

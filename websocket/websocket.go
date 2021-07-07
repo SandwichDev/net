@@ -20,10 +20,12 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-	"net/http"
-	"net/url"
 	"sync"
 	"time"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http"
 )
 
 const (

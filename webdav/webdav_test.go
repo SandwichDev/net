@@ -10,15 +10,18 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"reflect"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http/httptest"
+
+	"github.com/SandwichDev/net/http"
 )
 
 // TODO: add tests to check XML responses with the expected prefix path

@@ -323,7 +323,7 @@ func (h *histogram) html() template.HTML {
 	buf := new(bytes.Buffer)
 	if err := distTmpl().Execute(buf, h.newData()); err != nil {
 		buf.Reset()
-		log.Printf("net/trace: couldn't execute template: %v", err)
+		log.Printf("github.com/SandwichDev/net/trace: couldn't execute template: %v", err)
 	}
 	return template.HTML(buf.String())
 }

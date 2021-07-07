@@ -10,11 +10,12 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SandwichDev/net/http"
 )
 
 const defaultMaxOpenFiles = 256

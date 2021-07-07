@@ -17,9 +17,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net/http"
-	"net/url"
 	"strings"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http"
 )
 
 const (

@@ -20,9 +20,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/SandwichDev/net/http"
+	"github.com/SandwichDev/net/url"
 	"log"
-	"net/http"
-	"net/url"
 
 	"github.com/SandwichDev/net/webdav"
 )

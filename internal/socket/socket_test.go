@@ -307,7 +307,7 @@ func TestRace(t *testing.T) {
 		`
 package main
 import "net"
-import "github.com/SandwichDev/net/ipv4"
+import "golang.org/x/net/ipv4"
 var g byte
 func main() {
 	c, _ := net.ListenPacket("udp", "127.0.0.1:0")
@@ -324,7 +324,7 @@ func main() {
 		`
 package main
 import "net"
-import "github.com/SandwichDev/net/ipv4"
+import "golang.org/x/net/ipv4"
 func main() {
 	c, _ := net.ListenPacket("udp", "127.0.0.1:0")
 	cc := ipv4.NewPacketConn(c)

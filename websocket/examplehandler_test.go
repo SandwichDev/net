@@ -6,7 +6,8 @@ package websocket_test
 
 import (
 	"io"
-	"net/http"
+
+	"github.com/SandwichDev/net/http"
 
 	"github.com/SandwichDev/net/websocket"
 )

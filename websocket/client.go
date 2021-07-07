@@ -8,8 +8,10 @@ import (
 	"bufio"
 	"io"
 	"net"
-	"net/http"
-	"net/url"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http"
 )
 
 // DialError is an error that occurs while dialling a websocket server.

@@ -8,10 +8,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/SandwichDev/net/url"
 
 	"github.com/SandwichDev/net/http/httpproxy"
 )

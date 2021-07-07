@@ -10,10 +10,12 @@ import (
 	"context"
 	"io"
 	"io/ioutil"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/SandwichDev/net/http/httptest"
+
+	"github.com/SandwichDev/net/http"
 )
 
 func TestGo17Context(t *testing.T) {

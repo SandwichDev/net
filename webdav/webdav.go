@@ -3,18 +3,20 @@
 // license that can be found in the LICENSE file.
 
 // Package webdav provides a WebDAV server implementation.
-package webdav // import "github.com/SandwichDev/net/webdav"
+package webdav // import "golang.org/x/net/webdav"
 
 import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"strings"
 	"time"
+
+	"github.com/SandwichDev/net/url"
+
+	"github.com/SandwichDev/net/http"
 )
 
 type Handler struct {

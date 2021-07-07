@@ -10,7 +10,6 @@ import (
 	"html/template"
 	"io"
 	"log"
-	"net/http"
 	"runtime"
 	"sort"
 	"strconv"
@@ -19,6 +18,8 @@ import (
 	"sync/atomic"
 	"text/tabwriter"
 	"time"
+
+	"github.com/SandwichDev/net/http"
 )
 
 const maxEventsPerLog = 100
@@ -97,7 +98,7 @@ func RenderEvents(w http.ResponseWriter, req *http.Request, sensitive bool) {
 	famMu.RLock()
 	defer famMu.RUnlock()
 	if err := eventsTmpl().Execute(w, data); err != nil {
-		log.Printf("net/trace: Failed executing template: %v", err)
+		log.Printf("github.com/SandwichDev/net/trace: Failed executing template: %v", err)
 	}
 }
 

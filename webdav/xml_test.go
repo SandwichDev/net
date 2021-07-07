@@ -9,12 +9,14 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/SandwichDev/net/http/httptest"
+
+	"github.com/SandwichDev/net/http"
 
 	ixml "github.com/SandwichDev/net/webdav/internal/xml"
 )

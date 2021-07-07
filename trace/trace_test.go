@@ -5,9 +5,10 @@
 package trace
 
 import (
-	"net/http"
 	"reflect"
 	"testing"
+
+	"github.com/SandwichDev/net/http"
 )
 
 type s struct{}

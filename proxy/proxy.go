@@ -4,14 +4,15 @@
 
 // Package proxy provides support for a variety of protocols to proxy network
 // data.
-package proxy // import "github.com/SandwichDev/net/proxy"
+package proxy // import "golang.org/x/net/proxy"
 
 import (
 	"errors"
 	"net"
-	"net/url"
 	"os"
 	"sync"
+
+	"github.com/SandwichDev/net/url"
 )
 
 // A Dialer is a means to establish a connection.

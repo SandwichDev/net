@@ -14,10 +14,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/SandwichDev/net/url"
 
 	"github.com/SandwichDev/net/idna"
 )

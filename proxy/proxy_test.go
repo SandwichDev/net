@@ -10,10 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/SandwichDev/net/url"
 
 	"github.com/SandwichDev/net/internal/socks"
 	"github.com/SandwichDev/net/internal/sockstest"
