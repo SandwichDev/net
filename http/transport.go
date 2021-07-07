@@ -2230,6 +2230,7 @@ func (pc *persistConn) readLoop() {
 }
 
 func DecompressBody(response *Response) io.ReadCloser {
+	fmt.Println(response.Header.Get("Content-Encoding"))
 	switch response.Header.Get("Content-Encoding") {
 	case "gzip":
 		return &gzipReader{
@@ -2240,10 +2241,12 @@ func DecompressBody(response *Response) io.ReadCloser {
 			body: response.Body,
 		}
 	case "deflate":
-
+	default:
+		fmt.Println("Returning default")
+		return response.Body
 	}
-	fmt.Println("Returning default body")
-	return response.Body
+	fmt.Println("Returning nil")
+	return nil
 }
 
 func (pc *persistConn) readLoopPeekFailLocked(peekErr error) {
