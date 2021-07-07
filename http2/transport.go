@@ -131,6 +131,13 @@ type Transport struct {
 
 	connPoolOnce  sync.Once
 	connPoolOrDef ClientConnPool // non-nil version of ConnPool
+
+	// Http2 Settings
+
+	HeaderTableSize      uint32
+	MaxConcurrentStreams uint32
+	InitialWindowSize    uint32
+	MaxFrameSize         uint32
 }
 
 func (t *Transport) maxHeaderListSize() uint32 {
@@ -689,9 +696,24 @@ func (t *Transport) newClientConn(c net.Conn, singleUse bool) (*ClientConn, erro
 
 	initialSettings := []Setting{
 		{ID: SettingEnablePush, Val: 0},
-		{ID: SettingInitialWindowSize, Val: transportDefaultStreamFlow},
-		{ID: SettingMaxConcurrentStreams, Val: 1000},
 	}
+
+	if t.InitialWindowSize != 0 {
+		initialSettings = append(initialSettings, Setting{ID: SettingInitialWindowSize, Val: t.InitialWindowSize})
+	}
+
+	if t.MaxConcurrentStreams != 0 {
+		initialSettings = append(initialSettings, Setting{ID: SettingMaxConcurrentStreams, Val: t.MaxConcurrentStreams})
+	}
+
+	if t.HeaderTableSize != 0 {
+		initialSettings = append(initialSettings, Setting{ID: SettingHeaderTableSize, Val: t.HeaderTableSize})
+	}
+
+	if t.MaxFrameSize != 0 {
+		initialSettings = append(initialSettings, Setting{ID: SettingMaxFrameSize, Val: t.MaxFrameSize})
+	}
+
 	if max := t.maxHeaderListSize(); max != 0 {
 		initialSettings = append(initialSettings, Setting{ID: SettingMaxHeaderListSize, Val: max})
 	}
