@@ -2084,11 +2084,12 @@ func (rl *clientConnReadLoop) handleResponse(cs *clientStream, f *MetaHeadersFra
 	res.Body = transportResponseBody{cs}
 	go cs.awaitRequestCancel(cs.req)
 
-	if cs.requestedGzip && res.Header.Get("Content-Encoding") == "gzip" {
+	// Removed cs.requestedGzip to automatically handle gzip no matter the scenario
+	if res.Header.Get("Content-Encoding") == "gzip" || res.Header.Get("Content-Encoding") == "deflate" || res.Header.Get("Content-Encoding") == "br" {
 		res.Header.Del("Content-Encoding")
 		res.Header.Del("Content-Length")
 		res.ContentLength = -1
-		res.Body = &gzipReader{body: res.Body}
+		res.Body = http.DecompressBody(res)
 		res.Uncompressed = true
 	}
 	return res, nil

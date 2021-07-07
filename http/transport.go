@@ -35,6 +35,7 @@ import (
 
 	"github.com/SandwichDev/net/http/httpguts"
 	"github.com/SandwichDev/net/http/httpproxy"
+	"github.com/andybalholm/brotli"
 )
 
 // DefaultTransport is the default implementation of Transport and is
@@ -2186,8 +2187,8 @@ func (pc *persistConn) readLoop() {
 		}
 
 		resp.Body = body
-		if rc.addedGzip && strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-			resp.Body = &gzipReader{body: body}
+		if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") || strings.EqualFold(resp.Header.Get("Content-Encoding"), "deflate") || strings.EqualFold(resp.Header.Get("Content-Encoding"), "br") {
+			resp.Body = DecompressBody(resp)
 			resp.Header.Del("Content-Encoding")
 			resp.Header.Del("Content-Length")
 			resp.ContentLength = -1
@@ -2226,6 +2227,23 @@ func (pc *persistConn) readLoop() {
 
 		testHookReadLoopBeforeNextRead()
 	}
+}
+
+func DecompressBody(response *Response) io.ReadCloser {
+	switch response.Header.Get("Content-Encoding") {
+	case "gzip":
+		return &gzipReader{
+			body: response.Body,
+		}
+	case "br":
+		return &brotliReader{
+			body: response.Body,
+		}
+	case "deflate":
+
+	}
+
+	return response.Body
 }
 
 func (pc *persistConn) readLoopPeekFailLocked(peekErr error) {
@@ -2804,35 +2822,48 @@ func (es *bodyEOFSignal) condfn(err error) error {
 // call gzip.NewReader on the first call to Read
 type gzipReader struct {
 	_    incomparable
-	body *bodyEOFSignal // underlying HTTP/1 response body framing
-	zr   *gzip.Reader   // lazily-initialized gzip reader
-	zerr error          // any error from gzip.NewReader; sticky
+	body io.ReadCloser // underlying Response.Body
+	zr   *gzip.Reader  // lazily-initialized gzip reader
+	zerr error         // sticky error
 }
 
 func (gz *gzipReader) Read(p []byte) (n int, err error) {
+	if gz.zerr != nil {
+		return 0, gz.zerr
+	}
 	if gz.zr == nil {
-		if gz.zerr == nil {
-			gz.zr, gz.zerr = gzip.NewReader(gz.body)
+		gz.zr, err = gzip.NewReader(gz.body)
+		if err != nil {
+			gz.zerr = err
+			return 0, err
 		}
-		if gz.zerr != nil {
-			return 0, gz.zerr
-		}
-	}
-
-	gz.body.mu.Lock()
-	if gz.body.closed {
-		err = errReadOnClosedResBody
-	}
-	gz.body.mu.Unlock()
-
-	if err != nil {
-		return 0, err
 	}
 	return gz.zr.Read(p)
 }
 
 func (gz *gzipReader) Close() error {
 	return gz.body.Close()
+}
+
+type brotliReader struct {
+	_    incomparable
+	body io.ReadCloser
+	zr   *brotli.Reader
+	zerr error
+}
+
+func (br *brotliReader) Read(p []byte) (n int, err error) {
+	if br.zerr != nil {
+		return 0, br.zerr
+	}
+	if br.zr == nil {
+		br.zr = brotli.NewReader(br.body)
+	}
+	return br.zr.Read(p)
+}
+
+func (br *brotliReader) Close() error {
+	return br.body.Close()
 }
 
 type tlsHandshakeTimeoutError struct{}
