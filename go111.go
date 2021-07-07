@@ -7,7 +7,7 @@
 package http2
 
 import (
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 
 	"github.com/SandwichDev/net/http/httptrace"
 )

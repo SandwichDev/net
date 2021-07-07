@@ -29,7 +29,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 )
 
 var debug = debugT(false)

@@ -21,7 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
+
 	"github.com/SandwichDev/net/url"
 )
 

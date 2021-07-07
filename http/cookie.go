@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 )
 
 // A Cookie represents an HTTP cookie as sent in the Set-Cookie header of an

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 
 	"github.com/SandwichDev/go-internals/testenv"
 )

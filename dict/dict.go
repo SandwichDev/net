@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 )
 
 // A Client represents a client connection to a dictionary server.

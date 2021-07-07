@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 
 	"github.com/SandwichDev/net/http/httptrace"
 	"github.com/SandwichDev/net/http/internal"

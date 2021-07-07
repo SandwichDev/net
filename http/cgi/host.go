@@ -28,7 +28,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 
 	"github.com/SandwichDev/net/http"
 

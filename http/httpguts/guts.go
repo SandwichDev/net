@@ -12,7 +12,7 @@ package httpguts
 import (
 	"strings"
 
-	"github.com/SandwichDev/net/textproto"
+	"net/textproto"
 )
 
 // ValidTrailerHeader reports whether name is a valid header field name to appear
