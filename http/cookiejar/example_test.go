@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 
 	"github.com/SandwichDev/net/http/cookiejar"
 	"github.com/SandwichDev/net/http/httptest"

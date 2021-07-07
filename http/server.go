@@ -29,8 +29,8 @@ import (
 
 	"net/textproto"
 
-	"github.com/SandwichDev/net/url"
-	urlpkg "github.com/SandwichDev/net/url"
+	"net/url"
+	urlpkg "net/url"
 
 	"github.com/SandwichDev/net/http/httpguts"
 )

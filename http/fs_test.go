@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 
 	"github.com/SandwichDev/net/http/httptest"
 

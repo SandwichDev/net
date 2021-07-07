@@ -16,7 +16,7 @@ import (
 	"testing/iotest"
 	"time"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 type reqWriteTest struct {

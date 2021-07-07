@@ -23,7 +23,7 @@ import (
 
 	"net/textproto"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 // A Dir implements FileSystem using the native file system restricted to a

@@ -9,7 +9,7 @@ import (
 
 	"net/textproto"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 func cloneURLValues(v url.Values) url.Values {

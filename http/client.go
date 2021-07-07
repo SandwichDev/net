@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 // A Client is an HTTP client. Its zero value (DefaultClient) is a

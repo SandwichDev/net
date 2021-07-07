@@ -10,7 +10,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 func ExampleValues() {

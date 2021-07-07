@@ -5,7 +5,7 @@
 package http
 
 import (
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 // A CookieJar manages storage and use of cookies in HTTP requests.

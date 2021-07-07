@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 
 	"github.com/SandwichDev/net/internal/socks"
 	"github.com/SandwichDev/net/internal/sockstest"

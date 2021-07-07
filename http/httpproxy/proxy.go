@@ -18,7 +18,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 
 	"github.com/SandwichDev/net/idna"
 )

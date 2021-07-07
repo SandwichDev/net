@@ -510,7 +510,7 @@ func parse(rawurl string, viaRequest bool) (*URL, error) {
 	var err error
 
 	if stringContainsCTLByte(rawurl) {
-		return nil, errors.New("github.com/SandwichDev/net/url: invalid control character in URL")
+		return nil, errors.New("net/url: invalid control character in URL")
 	}
 
 	if rawurl == "" && viaRequest {
@@ -594,7 +594,7 @@ func parseAuthority(authority string) (user *Userinfo, host string, err error) {
 	}
 	userinfo := authority[:i]
 	if !validUserinfo(userinfo) {
-		return nil, "", errors.New("github.com/SandwichDev/net/url: invalid userinfo")
+		return nil, "", errors.New("net/url: invalid userinfo")
 	}
 	if !strings.Contains(userinfo, ":") {
 		if userinfo, err = unescape(userinfo, encodeUserPassword); err != nil {

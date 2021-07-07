@@ -1851,7 +1851,7 @@ func TestNilUser(t *testing.T) {
 
 func TestInvalidUserPassword(t *testing.T) {
 	_, err := Parse("http://user^:passwo^rd@foo.com/")
-	if got, wantsub := fmt.Sprint(err), "github.com/SandwichDev/net/url: invalid userinfo"; !strings.Contains(got, wantsub) {
+	if got, wantsub := fmt.Sprint(err), "net/url: invalid userinfo"; !strings.Contains(got, wantsub) {
 		t.Errorf("error = %q; want substring %q", got, wantsub)
 	}
 }
@@ -1864,7 +1864,7 @@ func TestRejectControlCharacters(t *testing.T) {
 	}
 	for _, s := range tests {
 		_, err := Parse(s)
-		const wantSub = "github.com/SandwichDev/net/url: invalid control character in URL"
+		const wantSub = "net/url: invalid control character in URL"
 		if got := fmt.Sprint(err); !strings.Contains(got, wantSub) {
 			t.Errorf("Parse(%q) error = %q; want substring %q", s, got, wantSub)
 		}

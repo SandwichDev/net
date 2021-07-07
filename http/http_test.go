@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 
 	"github.com/SandwichDev/go-internals/testenv"
 )

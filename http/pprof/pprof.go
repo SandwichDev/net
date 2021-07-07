@@ -73,7 +73,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 
 	"github.com/SandwichDev/go-internals/profile"
 

@@ -12,7 +12,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 // A Dialer is a means to establish a connection.

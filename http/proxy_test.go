@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 // TODO(mattn):

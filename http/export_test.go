@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SandwichDev/net/url"
+	"net/url"
 )
 
 var (
