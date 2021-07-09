@@ -6,6 +6,7 @@ package http2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 
 	"github.com/SandwichDev/net/http"
@@ -103,9 +104,8 @@ func pushedRequestToHTTPRequest(mppf *MetaPushPromiseFrame) (*http.Request, erro
 		if len(headers) == 0 {
 			headers = http.Header{}
 		}
-		if header.Name != "Host" {
-			headers.Add(header.Name, header.Value)
-		}
+		fmt.Println(header.Name, header.Value)
+		headers.Add(header.Name, header.Value)
 	}
 	if err := checkValidPushPromiseRequestHeaders(headers); err != nil {
 		return nil, err
