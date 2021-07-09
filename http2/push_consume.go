@@ -103,7 +103,9 @@ func pushedRequestToHTTPRequest(mppf *MetaPushPromiseFrame) (*http.Request, erro
 		if len(headers) == 0 {
 			headers = http.Header{}
 		}
-		headers.Add(header.Name, header.Value)
+		if header.Name != "Host" {
+			headers.Add(header.Name, header.Value)
+		}
 	}
 	if err := checkValidPushPromiseRequestHeaders(headers); err != nil {
 		return nil, err

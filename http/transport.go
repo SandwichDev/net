@@ -2750,7 +2750,6 @@ func DecompressBody(response *Response) io.ReadCloser {
 	default:
 		return response.Body
 	}
-	return nil
 }
 
 // bodyEOFSignal is used by the HTTP/1 transport when reading response
