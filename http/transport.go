@@ -11,7 +11,10 @@ package http
 
 import (
 	"bufio"
+	"bytes"
+	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"container/list"
 	"context"
 	"crypto/tls"
@@ -20,14 +23,13 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/textproto"
 	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"net/textproto"
 
 	"net/url"
 
@@ -2229,27 +2231,6 @@ func (pc *persistConn) readLoop() {
 	}
 }
 
-func DecompressBody(response *Response) io.ReadCloser {
-	fmt.Print(response)
-	fmt.Println(response.Header.Get("Content-Encoding"))
-	switch response.Header.Get("Content-Encoding") {
-	case "gzip":
-		return &gzipReader{
-			body: response.Body,
-		}
-	case "br":
-		return &brotliReader{
-			body: response.Body,
-		}
-	case "deflate":
-	default:
-		fmt.Println("Returning default")
-		return response.Body
-	}
-	fmt.Println("Returning nil")
-	return nil
-}
-
 func (pc *persistConn) readLoopPeekFailLocked(peekErr error) {
 	if pc.closed != nil {
 		return
@@ -2753,6 +2734,25 @@ func canonicalAddr(url *url.URL) string {
 	return net.JoinHostPort(addr, port)
 }
 
+// DecompressBody is used to return the proper decoded body based on the content encoding (gzip, brotli, deflate)
+func DecompressBody(response *Response) io.ReadCloser {
+	switch response.Header.Get("Content-Encoding") {
+	case "gzip":
+		return &gzipReader{
+			body: response.Body,
+		}
+	case "br":
+		return &brotliReader{
+			body: response.Body,
+		}
+	case "deflate":
+		return identifyDeflate(response.Body)
+	default:
+		return response.Body
+	}
+	return nil
+}
+
 // bodyEOFSignal is used by the HTTP/1 transport when reading response
 // bodies to make sure we see the end of a response body before
 // proceeding and reading on the connection again.
@@ -2868,6 +2868,91 @@ func (br *brotliReader) Read(p []byte) (n int, err error) {
 
 func (br *brotliReader) Close() error {
 	return br.body.Close()
+}
+
+type deflateReader struct {
+	_    incomparable
+	body io.ReadCloser
+	zr   io.ReadCloser
+	zerr error
+}
+
+func (df *deflateReader) Read(p []byte) (n int, err error) {
+	if df.zerr != nil {
+		return 0, err
+	}
+
+	if df.zr == nil {
+		df.zr = flate.NewReader(df.body)
+	}
+	return 0, nil
+}
+
+func (df *deflateReader) Close() error {
+	return df.body.Close()
+}
+
+type zlibDeflateReader struct {
+	_    incomparable
+	body io.ReadCloser
+	zr   io.ReadCloser
+	zerr error
+}
+
+func (df *zlibDeflateReader) Read(p []byte) (n int, err error) {
+	if df.zerr != nil {
+		return 0, err
+	}
+
+	if df.zr == nil {
+		df.zr, err = zlib.NewReader(df.body)
+		if err != nil {
+			df.zerr = err
+			return 0, err
+		}
+	}
+	return 0, nil
+}
+
+func (df *zlibDeflateReader) Close() error {
+	return df.body.Close()
+}
+
+const (
+	zlibMethodDeflate = 0x78
+	zlibLevelDefault  = 0x9C
+	zlibLevelLow      = 0x01
+	zlibLevelMedium   = 0x5E
+	zlibLevelBest     = 0xDA
+)
+
+func identifyDeflate(body io.ReadCloser) io.ReadCloser {
+	var header [2]byte
+	_, err := io.ReadFull(body, header[:])
+	if err != nil {
+		return body
+	}
+
+	if header[0] == zlibMethodDeflate &&
+		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
+		return &zlibDeflateReader{
+			body: prependBytesToReadCloser(header[:], body),
+		}
+	} else if header[0] == zlibMethodDeflate {
+		return &deflateReader{
+			body: prependBytesToReadCloser(header[:], body),
+		}
+	}
+	return body
+}
+
+func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
+	w := new(bytes.Buffer)
+	w.Write(b)
+	io.Copy(w, r)
+	defer r.Close()
+
+	return io.NopCloser(w)
 }
 
 type tlsHandshakeTimeoutError struct{}
