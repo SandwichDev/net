@@ -2961,9 +2961,9 @@ func checkValidPushPromiseRequestHeaders(h http.Header) error {
 			return fmt.Errorf("promised request cannot include body related header %q", k)
 		}
 	}
-	if _, ok := h["Host"]; ok {
-		return fmt.Errorf(`promised URL must be absolute so "Host" header disallowed`)
-	}
+	// if _, ok := h["Host"]; ok {
+	// 	return fmt.Errorf(`promised URL must be absolute so "Host" header disallowed`)
+	// }
 	return nil
 }
 
