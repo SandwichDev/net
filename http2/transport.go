@@ -124,6 +124,20 @@ type Transport struct {
 	// Defaults to 15s.
 	PingTimeout time.Duration
 
+	// PushHandler is called upon receiving PUSH_PROMISEs from the server.
+	// If nil, server push is disabled.
+	//
+	// Unless TLSClientConfig.InsecureSkipVerify is set, the Transport verifies
+	// whether the server is authoritative for the received PUSH_PROMISEs. On a
+	// TLS connection, this is done by verifing the certificates. On a non-TLS
+	// connection, the pushed request must have the same host name as the
+	// original one.
+	//
+	// There is no support for limiting the number of responses
+	// that can be concurrently pushed by the server, for example, by setting
+	// SETTINGS_MAX_CONCURRENT_STREAMS.
+	PushHandler PushHandler
+
 	// t1, if non-nil, is the standard library Transport using
 	// this transport. Its settings are used (but not its
 	// RoundTrip method, etc).
@@ -138,6 +152,7 @@ type Transport struct {
 	MaxConcurrentStreams uint32
 	InitialWindowSize    uint32
 	MaxFrameSize         uint32
+	EnablePush           uint32
 }
 
 func (t *Transport) maxHeaderListSize() uint32 {
@@ -237,11 +252,12 @@ func (t *Transport) initConnPool() {
 // ClientConn is the state of a single HTTP/2 client connection to an
 // HTTP/2 server.
 type ClientConn struct {
-	t         *Transport
-	tconn     net.Conn             // usually *tls.Conn, except specialized impls
-	tlsState  *tls.ConnectionState // nil only for specialized impls
-	reused    uint32               // whether conn is being reused; atomic
-	singleUse bool                 // whether being used for a single http.Request
+	t          *Transport
+	tconn      net.Conn             // usually *tls.Conn, except specialized impls
+	dialedAddr string               // addr dialed to create tconn; not set with NewClientConn
+	tlsState   *tls.ConnectionState // nil only for specialized impls
+	reused     uint32               // whether conn is being reused; atomic
+	singleUse  bool                 // whether being used for a single http.Request
 
 	// readLoop goroutine fields:
 	readerDone chan struct{} // closed on error
@@ -250,17 +266,19 @@ type ClientConn struct {
 	idleTimeout time.Duration // or 0 for never
 	idleTimer   *time.Timer
 
-	mu              sync.Mutex // guards following
-	cond            *sync.Cond // hold mu; broadcast on flow/closed changes
-	flow            flow       // our conn-level flow control quota (cs.flow is per stream)
-	inflow          flow       // peer's conn-level flow control
-	closing         bool
-	closed          bool
-	wantSettingsAck bool                     // we sent a SETTINGS frame and haven't heard back
-	goAway          *GoAwayFrame             // if non-nil, the GoAwayFrame we received
-	goAwayDebug     string                   // goAway frame's debug data, retained as a string
-	streams         map[uint32]*clientStream // client-initiated
-	nextStreamID    uint32
+	mu               sync.Mutex // guards following
+	cond             *sync.Cond // hold mu; broadcast on flow/closed changes
+	flow             flow       // our conn-level flow control quota (cs.flow is per stream)
+	inflow           flow       // peer's conn-level flow control
+	closing          bool
+	closed           bool
+	wantSettingsAck  bool                     // we sent a SETTINGS frame and haven't heard back
+	goAway           *GoAwayFrame             // if non-nil, the GoAwayFrame we received
+	goAwayDebug      string                   // goAway frame's debug data, retained as a string
+	streams          map[uint32]*clientStream // client-initiated
+	nextStreamID     uint32
+	highestPromiseID uint32 // highest promise id so far received from server
+
 	pendingRequests int                       // requests blocked and waiting to be sent because len(streams) == maxConcurrentStreams
 	pings           map[[8]byte]chan struct{} // in flight ping data to notification channel
 	bw              *bufio.Writer
@@ -311,6 +329,7 @@ type clientStream struct {
 	firstByte    bool  // got the first response byte
 	pastHeaders  bool  // got first MetaHeadersFrame (actual headers)
 	pastTrailers bool  // got optional second MetaHeadersFrame (trailers)
+	gotEndStream bool  // got frame with END_STREAM flag set
 	num1xx       uint8 // number of 1xx responses seen
 
 	trailer    http.Header  // accumulated trailers
@@ -449,9 +468,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.RoundTripOpt(req, RoundTripOpt{})
 }
 
-// authorityAddr returns a given authority (a host/IP, or host:port / ip:port)
-// and returns a host:port. The port 443 is added if needed.
-func authorityAddr(scheme string, authority string) (addr string) {
+// authorityHostPort accepts a given authority (a host/IP, or host:port / ip:port)
+// and returns a host and port.
+func authorityHostPort(scheme string, authority string) (host, port string) {
 	host, port, err := net.SplitHostPort(authority)
 	if err != nil { // authority didn't have a port
 		port = "443"
@@ -463,6 +482,13 @@ func authorityAddr(scheme string, authority string) (addr string) {
 	if a, err := idna.ToASCII(host); err == nil {
 		host = a
 	}
+	return
+}
+
+// authorityAddr accepts a given authority (a host/IP, or host:port / ip:port)
+// and returns a host:port. The port 443 is added if needed.
+func authorityAddr(scheme string, authority string) (addr string) {
+	host, port := authorityHostPort(scheme, authority)
 	// IPv6 address literal, without a port:
 	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
 		return host + ":" + port
@@ -583,7 +609,7 @@ func (t *Transport) dialClientConn(addr string, singleUse bool) (*ClientConn, er
 	if err != nil {
 		return nil, err
 	}
-	return t.newClientConn(tconn, singleUse)
+	return t.newClientConn(tconn, addr, singleUse)
 }
 
 func (t *Transport) newTLSConfig(host string) *tls.Config {
@@ -644,13 +670,14 @@ func (t *Transport) expectContinueTimeout() time.Duration {
 }
 
 func (t *Transport) NewClientConn(c net.Conn) (*ClientConn, error) {
-	return t.newClientConn(c, t.disableKeepAlives())
+	return t.newClientConn(c, "", t.disableKeepAlives())
 }
 
-func (t *Transport) newClientConn(c net.Conn, singleUse bool) (*ClientConn, error) {
+func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*ClientConn, error) {
 	cc := &ClientConn{
 		t:                     t,
 		tconn:                 c,
+		dialedAddr:            addr,
 		readerDone:            make(chan struct{}),
 		nextStreamID:          1,
 		maxFrameSize:          16 << 10,           // spec default
@@ -699,8 +726,12 @@ func (t *Transport) newClientConn(c net.Conn, singleUse bool) (*ClientConn, erro
 		cc.tlsState = &state
 	}
 
-	initialSettings := []Setting{
-		{ID: SettingEnablePush, Val: 0},
+	initialSettings := []Setting{}
+
+	if t.EnablePush == 1 && t.PushHandler != nil {
+		initialSettings = append(initialSettings, Setting{ID: SettingEnablePush, Val: 1})
+	} else {
+		initialSettings = append(initialSettings, Setting{ID: SettingEnablePush, Val: 0})
 	}
 
 	if t.InitialWindowSize != 0 {
@@ -1718,10 +1749,10 @@ type resAndError struct {
 }
 
 // requires cc.mu be held.
-func (cc *ClientConn) newStream() *clientStream {
+func (cc *ClientConn) newStreamWithId(streamId uint32, incNext bool) *clientStream {
 	cs := &clientStream{
 		cc:        cc,
-		ID:        cc.nextStreamID,
+		ID:        streamId,
 		resc:      make(chan resAndError, 1),
 		peerReset: make(chan struct{}),
 		done:      make(chan struct{}),
@@ -1730,9 +1761,16 @@ func (cc *ClientConn) newStream() *clientStream {
 	cs.flow.setConnFlow(&cc.flow)
 	cs.inflow.add(transportDefaultStreamFlow)
 	cs.inflow.setConnFlow(&cc.inflow)
-	cc.nextStreamID += 2
 	cc.streams[cs.ID] = cs
+	if incNext {
+		cc.nextStreamID += 2
+	}
 	return cs
+}
+
+// requires cc.mu be held.
+func (cc *ClientConn) newStream() *clientStream {
+	return cc.newStreamWithId(cc.nextStreamID, true)
 }
 
 func (cc *ClientConn) forgetStreamID(id uint32) {
@@ -1895,7 +1933,7 @@ func (rl *clientConnReadLoop) run() error {
 			maybeIdle = true
 		case *SettingsFrame:
 			err = rl.processSettings(f)
-		case *PushPromiseFrame:
+		case *MetaPushPromiseFrame:
 			err = rl.processPushPromise(f)
 		case *WindowUpdateFrame:
 			err = rl.processWindowUpdate(f)
@@ -1926,6 +1964,7 @@ func (rl *clientConnReadLoop) processHeaders(f *MetaHeadersFrame) error {
 		return nil
 	}
 	if f.StreamEnded() {
+		cs.gotEndStream = true
 		// Issue 20521: If the stream has ended, streamByID() causes
 		// clientStream.done to be closed, which causes the request's bodyWriter
 		// to be closed with an errStreamClosed, which may be received by
@@ -2232,7 +2271,9 @@ func (rl *clientConnReadLoop) processData(f *DataFrame) error {
 		cc.mu.Lock()
 		neverSent := cc.nextStreamID
 		cc.mu.Unlock()
-		if f.StreamID >= neverSent {
+		// If server initiated, could be from push cancel. Just ignore it.
+		serverInitiated := f.StreamID%2 == 0
+		if f.StreamID >= neverSent && !serverInitiated {
 			// We never asked for this.
 			cc.logf("http2: Transport received unsolicited DATA frame; closing connection")
 			return ConnectionError(ErrCodeProtocol)
@@ -2254,6 +2295,9 @@ func (rl *clientConnReadLoop) processData(f *DataFrame) error {
 			cc.wmu.Unlock()
 		}
 		return nil
+	}
+	if f.StreamEnded() {
+		cs.gotEndStream = true
 	}
 	if !cs.firstByte {
 		cc.logf("protocol error: received DATA before a HEADERS frame")
@@ -2524,15 +2568,77 @@ func (rl *clientConnReadLoop) processPing(f *PingFrame) error {
 	return cc.bw.Flush()
 }
 
-func (rl *clientConnReadLoop) processPushPromise(f *PushPromiseFrame) error {
-	// We told the peer we don't want them.
-	// Spec says:
-	// "PUSH_PROMISE MUST NOT be sent if the SETTINGS_ENABLE_PUSH
-	// setting of the peer endpoint is set to 0. An endpoint that
-	// has set this setting and has received acknowledgement MUST
-	// treat the receipt of a PUSH_PROMISE frame as a connection
-	// error (Section 5.4.1) of type PROTOCOL_ERROR."
-	return ConnectionError(ErrCodeProtocol)
+func (rl *clientConnReadLoop) processPushPromise(f *MetaPushPromiseFrame) error {
+	if rl.cc.t.PushHandler == nil { // should not be receiving PUSH_PROMISE if ENABLE_PUSH is disabled
+		return ConnectionError(ErrCodeProtocol)
+	}
+	if f.StreamID%2 != 1 { // Reject recursive push
+		return ConnectionError(ErrCodeProtocol)
+	}
+	if f.PromiseID%2 != 0 { // Reject invalid server-initiated stream id
+		return ConnectionError(ErrCodeProtocol)
+	}
+	stream := rl.cc.streamByID(f.StreamID, false)
+	// "A receiver MUST treat the receipt of a PUSH_PROMISE on a stream that is neither
+	// "open" nor "half-closed (local)" as a connection error of type PROTOCOL_ERROR"
+	// See: https://tools.ietf.org/html/rfc7540#section-6.6
+	if stream == nil || stream.resetErr != nil || stream.gotEndStream {
+		return ConnectionError(ErrCodeProtocol)
+	}
+
+	rl.cc.mu.Lock()
+	if f.PromiseID <= rl.cc.highestPromiseID {
+		rl.cc.mu.Unlock()
+		return ConnectionError(ErrCodeProtocol)
+	}
+	rl.cc.highestPromiseID = f.PromiseID
+	pushedStream := rl.cc.newStreamWithId(f.PromiseID, false)
+	rl.cc.mu.Unlock()
+
+	pushedReq, err := pushedRequestToHTTPRequest(f)
+	if err != nil {
+		return StreamError{f.StreamID, ErrCodeProtocol, err}
+	}
+	pushedReq.RemoteAddr = rl.cc.dialedAddr
+
+	// Reject non-authoritative pushes
+	skipVerify := rl.cc.t.TLSClientConfig != nil && rl.cc.t.TLSClientConfig.InsecureSkipVerify
+	if !skipVerify {
+		if stream.req.URL.Scheme != pushedReq.URL.Scheme {
+			err := fmt.Errorf("push's scheme %q not equal to original request's scheme %q",
+				pushedReq.URL.Scheme, stream.req.URL.Scheme)
+			return StreamError{f.StreamID, ErrCodeProtocol, err}
+		}
+		pushHost, pushPort := authorityHostPort(pushedReq.URL.Scheme, pushedReq.URL.Host)
+		origHost, origPort := authorityHostPort(stream.req.URL.Scheme, stream.req.URL.Host)
+		if origPort != pushPort {
+			err := fmt.Errorf("push's port %q not equal to original request's port %q", pushPort, origPort)
+			return StreamError{f.StreamID, ErrCodeProtocol, err}
+		}
+		var authoritative bool
+		if rl.cc.tlsState != nil {
+			authoritative = len(rl.cc.tlsState.VerifiedChains) > 0 &&
+				rl.cc.tlsState.PeerCertificates[0].VerifyHostname(pushedReq.URL.Hostname()) == nil
+		} else {
+			// Non-TLS connection
+			authoritative = pushHost == origHost
+		}
+		if !authoritative {
+			err := fmt.Errorf("server not authoritative for push with host %q", pushedReq.URL.Hostname())
+			return StreamError{f.StreamID, ErrCodeProtocol, err}
+		}
+	}
+
+	pushedReq.TLS = rl.cc.tlsState
+	pushedStream.req = pushedReq
+	pr := &PushedRequest{
+		Promise:               pushedReq,
+		OriginalRequestURL:    stream.req.URL,
+		OriginalRequestHeader: cloneHeader(stream.req.Header),
+		pushedStream:          pushedStream,
+	}
+	go handlePushEarlyReturnCancel(rl.cc.t.PushHandler, pr)
+	return nil
 }
 
 func (cc *ClientConn) writeStreamReset(streamID uint32, code ErrCode, err error) {
