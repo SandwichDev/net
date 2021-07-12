@@ -2746,7 +2746,7 @@ func identifyDeflate(body io.ReadCloser) io.ReadCloser {
 	fmt.Println("Identifying Deflate")
 	fmt.Println(body)
 	var header [2]byte
-	_, err := io.ReadFull(body, header[:])
+	_, err := io.ReadFull(bufio.NewReader(body), header[:])
 	if err != nil {
 		return body
 	}
@@ -2788,9 +2788,7 @@ func DecompressBody(response *Response) io.ReadCloser {
 		}
 	case "deflate":
 
-		return &zlibDeflateReader{
-			body: response.Body,
-		}
+		return identifyDeflate(response.Body)
 	default:
 		return response.Body
 	}
