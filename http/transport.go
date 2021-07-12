@@ -2770,7 +2770,10 @@ func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
 	fmt.Println("Appending bytes 1")
 	w.Write(b)
 	fmt.Println("Appending bytes 2")
-	io.Copy(bufio.NewWriter(w), bufio.NewReader(r))
+	_, err := io.Copy(bufio.NewWriter(w), bufio.NewReader(r))
+	if err != nil {
+		fmt.Println(err)
+	}
 	fmt.Println("Appending bytes 3")
 	defer r.Close()
 	fmt.Println("Appending bytes 4")
