@@ -2743,10 +2743,17 @@ const (
 )
 
 func identifyDeflate(body io.ReadCloser) io.ReadCloser {
+	fmt.Println("Reading body")
+	bodyBytes, err := io.ReadAll(body)
+	fmt.Println("Read body")
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Println(string(bodyBytes))
 	fmt.Println("Identifying Deflate")
 	fmt.Println(body)
 	var header [2]byte
-	_, err := io.ReadFull(body, header[:])
+	_, err = io.ReadFull(body, header[:])
 	if err != nil {
 		return body
 	}
