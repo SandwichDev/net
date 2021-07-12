@@ -11,6 +11,7 @@ package http
 
 import (
 	"bufio"
+	"bytes"
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
@@ -2745,9 +2746,7 @@ func DecompressBody(response *Response) io.ReadCloser {
 			body: response.Body,
 		}
 	case "deflate":
-		return &deflateReader{
-			body: response.Body,
-		}
+		return identifyDeflate(response.Body)
 	default:
 		return response.Body
 	}
@@ -2916,6 +2915,47 @@ func (df *zlibDeflateReader) Read(p []byte) (n int, err error) {
 
 func (df *zlibDeflateReader) Close() error {
 	return df.body.Close()
+}
+
+const (
+	zlibMethodDeflate = 0x78
+	zlibLevelDefault  = 0x9C
+	zlibLevelLow      = 0x01
+	zlibLevelMedium   = 0x5E
+	zlibLevelBest     = 0xDA
+)
+
+func identifyDeflate(body io.ReadCloser) io.ReadCloser {
+	fmt.Println("Identifying Deflate")
+	fmt.Println(body)
+	var header [2]byte
+	_, err := io.ReadFull(body, header[:])
+	if err != nil {
+		return body
+	}
+	fmt.Println("Identifying Deflate [2]")
+	if header[0] == zlibMethodDeflate &&
+		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
+		fmt.Println("ZLIB Deflate")
+		return &zlibDeflateReader{
+			body: prependBytesToReadCloser(header[:], body),
+		}
+	} else if header[0] == zlibMethodDeflate {
+		fmt.Println("Normal Deflate")
+		return &deflateReader{
+			body: prependBytesToReadCloser(header[:], body),
+		}
+	}
+	return body
+}
+
+func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
+	w := new(bytes.Buffer)
+	w.Write(b)
+	io.Copy(w, r)
+	defer r.Close()
+
+	return io.NopCloser(w)
 }
 
 type tlsHandshakeTimeoutError struct{}
