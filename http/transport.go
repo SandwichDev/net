@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/textproto"
@@ -2789,16 +2788,9 @@ func DecompressBody(response *Response) io.ReadCloser {
 		}
 	case "deflate":
 
-		fmt.Println("Reading body")
-
-		bodyBytes, err := ioutil.ReadAll(response.Request.Body)
-		fmt.Println("Read body")
-		if err != nil {
-			fmt.Println(err)
-			return response.Body
+		return &zlibDeflateReader{
+			body: response.Body,
 		}
-		fmt.Println(string(bodyBytes))
-		return identifyDeflate(response.Body)
 	default:
 		return response.Body
 	}
