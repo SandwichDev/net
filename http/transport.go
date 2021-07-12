@@ -2928,11 +2928,13 @@ const (
 func identifyDeflate(body io.ReadCloser) io.ReadCloser {
 	fmt.Println("Identifying Deflate")
 	var header [2]byte
-	_, err := io.ReadFull(body, header[:])
+	bytes, err := io.ReadAll(body)
 	fmt.Println(err)
 	if err != nil {
 		return body
 	}
+	header[0] = bytes[0]
+	header[1] = bytes[1]
 	fmt.Println("Identifying Deflate [2]")
 	if header[0] == zlibMethodDeflate &&
 		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
