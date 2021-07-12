@@ -2885,7 +2885,7 @@ func (df *deflateReader) Read(p []byte) (n int, err error) {
 	if df.zr == nil {
 		df.zr = flate.NewReader(df.body)
 	}
-	return 0, nil
+	return df.zr.Read(p)
 }
 
 func (df *deflateReader) Close() error {
@@ -2911,7 +2911,7 @@ func (df *zlibDeflateReader) Read(p []byte) (n int, err error) {
 			return 0, err
 		}
 	}
-	return 0, nil
+	return df.zr.Read(p)
 }
 
 func (df *zlibDeflateReader) Close() error {
