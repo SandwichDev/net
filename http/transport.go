@@ -2792,6 +2792,7 @@ func DecompressBody(response *Response) io.ReadCloser {
 		fmt.Println("Read body")
 		if err != nil {
 			fmt.Println(err)
+			return response.Body
 		}
 		fmt.Println(string(bodyBytes))
 		return identifyDeflate(response.Body)
