@@ -2753,12 +2753,12 @@ func identifyDeflate(body io.ReadCloser) io.ReadCloser {
 		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
 		fmt.Println("ZLIB Deflate")
 		return &zlibDeflateReader{
-			body: prependBytesToReadCloser(header[:], body),
+			body: body,
 		}
 	} else if header[0] == zlibMethodDeflate {
 		fmt.Println("Normal Deflate")
 		return &deflateReader{
-			body: prependBytesToReadCloser(header[:], body),
+			body: body,
 		}
 	}
 	return body
