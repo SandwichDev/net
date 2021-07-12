@@ -2743,14 +2743,12 @@ const (
 )
 
 func identifyDeflate(body io.ReadCloser) io.ReadCloser {
-	fmt.Println("Identifying Deflate")
-	fmt.Println(body)
 	var header [2]byte
 	_, err := io.ReadFull(bufio.NewReader(body), header[:])
 	if err != nil {
 		return body
 	}
-	fmt.Println("Identifying Deflate [2]")
+	fmt.Println(header[0])
 	if header[0] == zlibMethodDeflate &&
 		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
 		fmt.Println("ZLIB Deflate")
@@ -2767,11 +2765,12 @@ func identifyDeflate(body io.ReadCloser) io.ReadCloser {
 }
 
 func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
+	fmt.Println("Appending bytes")
 	w := new(bytes.Buffer)
 	w.Write(b)
 	io.Copy(w, r)
 	defer r.Close()
-
+	fmt.Println("Bytes Appended")
 	return io.NopCloser(w)
 }
 
