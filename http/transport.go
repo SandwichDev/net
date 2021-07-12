@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/textproto"
@@ -2788,7 +2789,7 @@ func DecompressBody(response *Response) io.ReadCloser {
 		}
 	case "deflate":
 		fmt.Println("Reading body")
-		bodyBytes, err := io.ReadAll(response.Body)
+		bodyBytes, err := ioutil.ReadAll(response.Body)
 		fmt.Println("Read body")
 		if err != nil {
 			fmt.Println(err)
