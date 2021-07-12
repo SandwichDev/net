@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"net/textproto"
@@ -32,8 +33,6 @@ import (
 	"time"
 
 	"net/url"
-
-	"github.com/SandwichDev/net/http/httputil"
 
 	"github.com/SandwichDev/net/http/httptrace"
 
@@ -2792,7 +2791,7 @@ func DecompressBody(response *Response) io.ReadCloser {
 
 		fmt.Println("Reading body")
 
-		bodyBytes, err := httputil.DumpResponse(response, true)
+		bodyBytes, err := ioutil.ReadAll(response.Request.Body)
 		fmt.Println("Read body")
 		if err != nil {
 			fmt.Println(err)
