@@ -2748,17 +2748,17 @@ func identifyDeflate(body io.ReadCloser) io.ReadCloser {
 	if err != nil {
 		return body
 	}
-	fmt.Println(header[0])
+	fmt.Println(header[0], header[1])
 	if header[0] == zlibMethodDeflate &&
 		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
 		fmt.Println("ZLIB Deflate")
 		return &zlibDeflateReader{
-			body: body,
+			body: prependBytesToReadCloser(header[:], body),
 		}
 	} else if header[0] == zlibMethodDeflate {
 		fmt.Println("Normal Deflate")
 		return &deflateReader{
-			body: body,
+			body: prependBytesToReadCloser(header[:], body),
 		}
 	}
 	return body
@@ -2767,10 +2767,13 @@ func identifyDeflate(body io.ReadCloser) io.ReadCloser {
 func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
 	fmt.Println("Appending bytes")
 	w := new(bytes.Buffer)
+	fmt.Println("Appending bytes 1")
 	w.Write(b)
+	fmt.Println("Appending bytes 2")
 	io.Copy(w, r)
+	fmt.Println("Appending bytes 3")
 	defer r.Close()
-	fmt.Println("Bytes Appended")
+	fmt.Println("Appending bytes 4")
 	return io.NopCloser(w)
 }
 
