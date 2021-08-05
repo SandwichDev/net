@@ -2781,7 +2781,9 @@ func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
 	fmt.Println("Appending bytes 5")
 	defer r.Close()
 	fmt.Println("Appending bytes 6")
-	return io.NopCloser(w)
+	closer := io.NopCloser(w)
+	fmt.Println("Appending bytes 7")
+	return closer
 }
 
 // DecompressBody is used to return the proper decoded body based on the content encoding (gzip, brotli, deflate)
