@@ -2564,7 +2564,7 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 		// auto-decoding a portion of a gzipped document will just fail
 		// anyway. See https://golang.org/issue/8923
 		requestedGzip = true
-		req.extraHeaders().Set("Accept-Encoding", "gzip")
+		req.extraHeaders().Set("Accept-Encoding", "gzip, deflate, br")
 	}
 
 	var continueCh chan struct{}
@@ -2772,9 +2772,9 @@ func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
 	fmt.Println("Appending bytes 1")
 	w.Write(b)
 	fmt.Println("Appending bytes 2 [Writer]")
-	writer := bufio.NewWriter(w)
+	writer := w
 	fmt.Println("Appending bytes 3 [Reader]")
-	reader := bufio.NewReader(r)
+	reader := r
 	fmt.Println("Appending bytes 4")
 	_, err := io.CopyN(writer, reader, 2)
 	if err != nil {
