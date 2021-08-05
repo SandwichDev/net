@@ -2952,13 +2952,16 @@ type zlibDeflateReader struct {
 }
 
 func (df *zlibDeflateReader) Read(p []byte) (n int, err error) {
+	fmt.Println("Reading [ZLIB DEFLATE]")
 	if df.zerr != nil {
+		fmt.Println(err)
 		return 0, err
 	}
 
 	if df.zr == nil {
 		df.zr, err = zlib.NewReader(df.body)
 		if err != nil {
+			fmt.Println(err)
 			df.zerr = err
 			return 0, err
 		}
