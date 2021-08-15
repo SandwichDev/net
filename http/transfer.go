@@ -66,6 +66,7 @@ type transferWriter struct {
 	Close            bool
 	TransferEncoding []string
 	Header           Header
+	Headers 		 [][2]string
 	Trailer          Header
 	IsResponse       bool
 	bodyReadError    error // any non-EOF error from reading Body
@@ -87,6 +88,7 @@ func newTransferWriter(r interface{}) (t *transferWriter, err error) {
 		t.Method = valueOrDefault(rr.Method, "GET")
 		t.Close = rr.Close
 		t.TransferEncoding = rr.TransferEncoding
+		t.Headers = rr.Headers
 		t.Header = rr.Header
 		t.Trailer = rr.Trailer
 		t.Body = rr.Body
@@ -252,6 +254,11 @@ func (t *transferWriter) shouldSendContentLength() bool {
 	if chunked(t.TransferEncoding) {
 		return false
 	}
+	for _, header := range t.Headers {
+		if strings.ToLower(header[0]) == "content-length" {
+			return false
+		}
+	}
 	if t.ContentLength > 0 {
 		return true
 	}
@@ -274,12 +281,12 @@ func (t *transferWriter) shouldSendContentLength() bool {
 
 func (t *transferWriter) writeHeader(w io.Writer, trace *httptrace.ClientTrace) error {
 	if t.Close && !hasToken(t.Header.get("Connection"), "close") {
-		if _, err := io.WriteString(w, "Connection: close\r\n"); err != nil {
-			return err
-		}
-		if trace != nil && trace.WroteHeaderField != nil {
-			trace.WroteHeaderField("Connection", []string{"close"})
-		}
+		// if _, err := io.WriteString(w, "Connection: close\r\n"); err != nil {
+		// 	return err
+		// }
+		// if trace != nil && trace.WroteHeaderField != nil {
+		// 	trace.WroteHeaderField("Connection", []string{"close"})
+		// }
 	}
 
 	// Write Content-Length and/or Transfer-Encoding whose values are a

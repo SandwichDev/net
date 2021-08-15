@@ -89,9 +89,9 @@ func badStringError(what, val string) error { return fmt.Errorf("%s %q", what, v
 
 // Headers that Request.Write handles itself and should be skipped.
 var reqWriteExcludeHeader = map[string]bool{
-	"Host":              true, // not in Header map anyway
-	"User-Agent":        true,
-	"Content-Length":    true,
+	// "Host":              true, // not in Header map anyway
+	// "User-Agent":        true,
+	// "Content-Length":    true,
 	"Transfer-Encoding": true,
 	"Trailer":           true,
 }
@@ -166,6 +166,8 @@ type Request struct {
 	// values in Header may be ignored. See the documentation
 	// for the Request.Write method.
 	Header Header
+
+	Headers [][2]string
 
 	// Body is the request's body.
 	//
@@ -630,6 +632,15 @@ func (r *Request) write(w io.Writer, usingProxy bool, extraHeaders Header, waitF
 	if r.Header.has("User-Agent") {
 		userAgent = r.Header.Get("User-Agent")
 	}
+
+	for _, header := range r.Headers {
+		if strings.ToLower(header[0]) == "user-agent" {
+			userAgent = ""
+		} else if strings.ToLower(header[0]) == "host" {
+			host = ""
+		}
+	}
+
 	if userAgent != "" {
 		_, err = fmt.Fprintf(w, "User-Agent: %s\r\n", userAgent)
 		if err != nil {
@@ -641,16 +652,28 @@ func (r *Request) write(w io.Writer, usingProxy bool, extraHeaders Header, waitF
 	}
 
 	// Process Body,ContentLength,Close,Trailer
+
+
+	for _, header := range r.Headers {
+		key := header[0]
+		value := header[1]
+		h := Header {
+			key: []string{value,},
+		}
+		h.writeSubset(w, reqWriteExcludeHeader, trace)
+	}
+
+
+	err = r.Header.writeSubset(w, reqWriteExcludeHeader, trace)
+	if err != nil {
+		return err
+	}
+
 	tw, err := newTransferWriter(r)
 	if err != nil {
 		return err
 	}
 	err = tw.writeHeader(w, trace)
-	if err != nil {
-		return err
-	}
-
-	err = r.Header.writeSubset(w, reqWriteExcludeHeader, trace)
 	if err != nil {
 		return err
 	}

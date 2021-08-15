@@ -11,10 +11,7 @@ package http
 
 import (
 	"bufio"
-	"bytes"
-	"compress/flate"
 	"compress/gzip"
-	"compress/zlib"
 	"container/list"
 	"context"
 	"crypto/tls"
@@ -2189,7 +2186,7 @@ func (pc *persistConn) readLoop() {
 		}
 
 		resp.Body = body
-		if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") || strings.EqualFold(resp.Header.Get("Content-Encoding"), "deflate") || strings.EqualFold(resp.Header.Get("Content-Encoding"), "br") {
+		if rc.addedGzip {
 			resp.Body = DecompressBody(resp)
 			resp.Header.Del("Content-Encoding")
 			resp.Header.Del("Content-Length")
@@ -2564,7 +2561,7 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 		// auto-decoding a portion of a gzipped document will just fail
 		// anyway. See https://golang.org/issue/8923
 		requestedGzip = true
-		req.extraHeaders().Set("Accept-Encoding", "gzip, deflate, br")
+		req.extraHeaders().Set("Accept-Encoding", "gzip, br")
 	}
 
 	var continueCh chan struct{}
@@ -2572,11 +2569,11 @@ func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err err
 		continueCh = make(chan struct{}, 1)
 	}
 
-	if pc.t.DisableKeepAlives &&
-		!req.wantsClose() &&
-		!isProtocolSwitchHeader(req.Header) {
-		req.extraHeaders().Set("Connection", "close")
-	}
+	// if pc.t.DisableKeepAlives &&
+	// 	!req.wantsClose() &&
+	// 	!isProtocolSwitchHeader(req.Header) {
+	// 	req.extraHeaders().Set("Connection", "close")
+	// }
 
 	gone := make(chan struct{})
 	defer close(gone)
@@ -2734,60 +2731,6 @@ func canonicalAddr(url *url.URL) string {
 	return net.JoinHostPort(addr, port)
 }
 
-const (
-	zlibMethodDeflate = 0x78
-	zlibLevelDefault  = 0x9C
-	zlibLevelLow      = 0x01
-	zlibLevelMedium   = 0x5E
-	zlibLevelBest     = 0xDA
-)
-
-func identifyDeflate(body io.ReadCloser) io.ReadCloser {
-	var header [2]byte
-	_, err := io.ReadFull(bufio.NewReader(body), header[:])
-	if err != nil {
-		return body
-	}
-	fmt.Println(header[0], header[1])
-	if header[0] == zlibMethodDeflate &&
-		(header[1] == zlibLevelDefault || header[1] == zlibLevelLow || header[1] == zlibLevelMedium || header[1] == zlibLevelBest) {
-		fmt.Println("ZLIB Deflate")
-		fmt.Println("Prepended Bytes")
-		fmt.Println(prependBytesToReadCloser(header[:], body))
-		return &zlibDeflateReader{
-			body: prependBytesToReadCloser(header[:], body),
-		}
-	} else if header[0] == zlibMethodDeflate {
-		fmt.Println("Normal Deflate")
-		return &deflateReader{
-			body: prependBytesToReadCloser(header[:], body),
-		}
-	}
-	return body
-}
-
-func prependBytesToReadCloser(b []byte, r io.ReadCloser) io.ReadCloser {
-	fmt.Println("Appending bytes")
-	w := new(bytes.Buffer)
-	fmt.Println("Appending bytes 1")
-	w.Write(b)
-	fmt.Println("Appending bytes 2 [Writer]")
-	writer := w
-	fmt.Println("Appending bytes 3 [Reader]")
-	reader := r
-	fmt.Println("Appending bytes 4")
-	_, err := io.CopyN(writer, reader, 2)
-	if err != nil {
-		fmt.Println(err)
-	}
-	fmt.Println("Appending bytes 5")
-	defer r.Close()
-	fmt.Println("Appending bytes 6")
-	closer := io.NopCloser(w)
-	fmt.Println("Appending bytes 7")
-	return closer
-}
-
 // DecompressBody is used to return the proper decoded body based on the content encoding (gzip, brotli, deflate)
 func DecompressBody(response *Response) io.ReadCloser {
 	switch response.Header.Get("Content-Encoding") {
@@ -2800,8 +2743,8 @@ func DecompressBody(response *Response) io.ReadCloser {
 			body: response.Body,
 		}
 	case "deflate":
-
-		return identifyDeflate(response.Body)
+		fmt.Println("Unsupported")
+		return nil
 	default:
 		return response.Body
 	}
@@ -2922,57 +2865,6 @@ func (br *brotliReader) Read(p []byte) (n int, err error) {
 
 func (br *brotliReader) Close() error {
 	return br.body.Close()
-}
-
-type deflateReader struct {
-	_    incomparable
-	body io.ReadCloser
-	zr   io.ReadCloser
-	zerr error
-}
-
-func (df *deflateReader) Read(p []byte) (n int, err error) {
-	if df.zerr != nil {
-		return 0, err
-	}
-
-	if df.zr == nil {
-		df.zr = flate.NewReader(df.body)
-	}
-	return df.zr.Read(p)
-}
-
-func (df *deflateReader) Close() error {
-	return df.body.Close()
-}
-
-type zlibDeflateReader struct {
-	_    incomparable
-	body io.ReadCloser
-	zr   io.ReadCloser
-	zerr error
-}
-
-func (df *zlibDeflateReader) Read(p []byte) (n int, err error) {
-	fmt.Println("Reading [ZLIB DEFLATE]")
-	if df.zerr != nil {
-		fmt.Println(err)
-		return 0, err
-	}
-
-	if df.zr == nil {
-		df.zr, err = zlib.NewReader(df.body)
-		if err != nil {
-			fmt.Println(err)
-			df.zerr = err
-			return 0, err
-		}
-	}
-	return df.zr.Read(p)
-}
-
-func (df *zlibDeflateReader) Close() error {
-	return df.body.Close()
 }
 
 type tlsHandshakeTimeoutError struct{}
