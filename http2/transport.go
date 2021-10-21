@@ -152,6 +152,7 @@ type Transport struct {
 	MaxConcurrentStreams uint32
 	InitialWindowSize    uint32
 	MaxFrameSize         uint32
+	WindowUpdate         uint32
 	EnablePush           uint32
 }
 
@@ -756,7 +757,11 @@ func (t *Transport) newClientConn(c net.Conn, addr string, singleUse bool) (*Cli
 
 	cc.bw.Write(clientPreface)
 	cc.fr.WriteSettings(initialSettings...)
-	cc.fr.WriteWindowUpdate(0, transportDefaultConnFlow)
+	if t.WindowUpdate != 0 {
+		cc.fr.WriteWindowUpdate(0, t.WindowUpdate)
+	} else {
+		cc.fr.WriteWindowUpdate(0, transportDefaultConnFlow)
+	}
 	cc.inflow.add(transportDefaultConnFlow + initialWindowSize)
 	cc.bw.Flush()
 	if cc.werr != nil {
@@ -1581,22 +1586,55 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 		}
 	}
 
+	pseudoHeaderMap := map[string]string{
+		"a": ":authority",
+		"m": ":method",
+		"p": ":path",
+		"s": ":scheme",
+	}
+
 	enumerateHeaders := func(f func(name, value string)) {
 		// 8.1.2.3 Request Pseudo-Header Fields
 		// The :path pseudo-header field includes the path and query parts of the
 		// target URI (the path-absolute production and optionally a '?' character
 		// followed by the query production (see Sections 3.3 and 3.4 of
 		// [RFC3986]).
-		f(":authority", host)
 		m := req.Method
 		if m == "" {
 			m = http.MethodGet
 		}
-		f(":method", m)
-		if req.Method != "CONNECT" {
-			f(":path", path)
-			f(":scheme", req.URL.Scheme)
+		fmt.Println(req.PseudoHeaderOrder)
+		if len(req.PseudoHeaderOrder) > 0 && len(req.PseudoHeaderOrder) == 4 {
+			for _, kk := range req.PseudoHeaderOrder {
+				pseudoHeader, ok := pseudoHeaderMap[kk]
+				if ok {
+					var pseudoHeaderValue string
+
+					switch pseudoHeader {
+					case ":authority":
+						pseudoHeaderValue = host
+					case "method":
+						pseudoHeaderValue = m
+					case ":path":
+						pseudoHeaderValue = path
+					case ":scheme":
+						pseudoHeaderValue = req.URL.Scheme
+					}
+					if req.Method == "CONNECT" && pseudoHeader == ":path" || pseudoHeader == ":scheme" {
+						continue
+					}
+					f(pseudoHeader, pseudoHeaderValue)
+				}
+			}
+		} else {
+			f(":authority", host)
+			f(":method", m)
+			if req.Method != "CONNECT" {
+				f(":path", path)
+				f(":scheme", req.URL.Scheme)
+			}
 		}
+
 		if trailers != "" {
 			f("trailer", trailers)
 		}

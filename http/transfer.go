@@ -58,18 +58,19 @@ func (br *byteReader) Read(p []byte) (n int, err error) {
 // sanitizes them without changing the user object and provides methods for
 // writing the respective header, body and trailer in wire format.
 type transferWriter struct {
-	Method           string
-	Body             io.Reader
-	BodyCloser       io.Closer
-	ResponseToHEAD   bool
-	ContentLength    int64 // -1 means unknown, 0 means exactly none
-	Close            bool
-	TransferEncoding []string
-	Header           Header
-	Headers 		 [][2]string
-	Trailer          Header
-	IsResponse       bool
-	bodyReadError    error // any non-EOF error from reading Body
+	Method            string
+	Body              io.Reader
+	BodyCloser        io.Closer
+	ResponseToHEAD    bool
+	ContentLength     int64 // -1 means unknown, 0 means exactly none
+	Close             bool
+	TransferEncoding  []string
+	Header            Header
+	Headers           [][2]string
+	PseudoHeaderOrder [4]string
+	Trailer           Header
+	IsResponse        bool
+	bodyReadError     error // any non-EOF error from reading Body
 
 	FlushHeaders bool            // flush headers to network before body
 	ByteReadCh   chan readResult // non-nil if probeRequestBody called
@@ -89,6 +90,7 @@ func newTransferWriter(r interface{}) (t *transferWriter, err error) {
 		t.Close = rr.Close
 		t.TransferEncoding = rr.TransferEncoding
 		t.Headers = rr.Headers
+		t.PseudoHeaderOrder = rr.PseudoHeaderOrder
 		t.Header = rr.Header
 		t.Trailer = rr.Trailer
 		t.Body = rr.Body

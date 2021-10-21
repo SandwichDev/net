@@ -169,6 +169,8 @@ type Request struct {
 
 	Headers [][2]string
 
+	PseudoHeaderOrder [4]string
+
 	// Body is the request's body.
 	//
 	// For client requests, a nil body means the request has no
@@ -653,16 +655,14 @@ func (r *Request) write(w io.Writer, usingProxy bool, extraHeaders Header, waitF
 
 	// Process Body,ContentLength,Close,Trailer
 
-
 	for _, header := range r.Headers {
 		key := header[0]
 		value := header[1]
-		h := Header {
-			key: []string{value,},
+		h := Header{
+			key: []string{value},
 		}
 		h.writeSubset(w, reqWriteExcludeHeader, trace)
 	}
-
 
 	err = r.Header.writeSubset(w, reqWriteExcludeHeader, trace)
 	if err != nil {
