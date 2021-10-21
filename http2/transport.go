@@ -1603,7 +1603,7 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 		if m == "" {
 			m = http.MethodGet
 		}
-		fmt.Println(req.PseudoHeaderOrder)
+		fmt.Println(len(req.PseudoHeaderOrder))
 		if len(req.PseudoHeaderOrder) > 0 && len(req.PseudoHeaderOrder) == 4 {
 			for _, kk := range req.PseudoHeaderOrder {
 				pseudoHeader, ok := pseudoHeaderMap[kk]
@@ -1620,7 +1620,8 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 					case ":scheme":
 						pseudoHeaderValue = req.URL.Scheme
 					}
-					if req.Method == "CONNECT" && pseudoHeader == ":path" || pseudoHeader == ":scheme" {
+					fmt.Println(pseudoHeader, pseudoHeaderValue)
+					if req.Method == "CONNECT" && (pseudoHeader == ":path" || pseudoHeader == ":scheme") {
 						continue
 					}
 					f(pseudoHeader, pseudoHeaderValue)
