@@ -1347,6 +1347,11 @@ func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize
 				BlockFragment: chunk,
 				EndStream:     endStream,
 				EndHeaders:    endHeaders,
+				Priority: PriorityParam{
+					StreamDep: 0,
+					Exclusive: true,
+					Weight:    219,
+				},
 			})
 			first = false
 		} else {
@@ -1845,7 +1850,11 @@ func (cc *ClientConn) newStreamWithId(streamId uint32, incNext bool) *clientStre
 	}
 	cs.flow.add(int32(cc.initialWindowSize))
 	cs.flow.setConnFlow(&cc.flow)
-	cs.inflow.add(transportDefaultStreamFlow)
+	streamFlow := transportDefaultStreamFlow
+	if cc.t.InitialWindowSize != 0 {
+		streamFlow = int(cc.t.InitialWindowSize)
+	}
+	cs.inflow.add(int32(streamFlow))
 	cs.inflow.setConnFlow(&cc.inflow)
 	cc.streams[cs.ID] = cs
 	if incNext {
@@ -2297,9 +2306,14 @@ func (b transportResponseBody) Read(p []byte) (n int, err error) {
 		// Consider any buffered body data (read from the conn but not
 		// consumed by the client) when computing flow control for this
 		// stream.
+		streamFlow := transportDefaultStreamFlow
+		if cc.t.InitialWindowSize != 0 {
+			streamFlow = int(cc.t.InitialWindowSize)
+		}
+
 		v := int(cs.inflow.available()) + cs.bufPipe.Len()
-		if v < transportDefaultStreamFlow-transportDefaultStreamMinRefresh {
-			streamAdd = int32(transportDefaultStreamFlow - v)
+		if v < streamFlow-transportDefaultStreamMinRefresh {
+			streamAdd = int32(streamFlow - v)
 			cs.inflow.add(streamAdd)
 		}
 	}
@@ -2532,8 +2546,10 @@ func (rl *clientConnReadLoop) processSettings(f *SettingsFrame) error {
 			cc.cond.Broadcast()
 
 			cc.initialWindowSize = s.Val
+		case SettingHeaderTableSize:
+			cc.henc.SetMaxDynamicTableSizeLimit(s.Val)
 		default:
-			// TODO(bradfitz): handle more settings? SETTINGS_HEADER_TABLE_SIZE probably.
+			// TODO(bradfitz): handle more settings?
 			cc.vlogf("Unhandled Setting: %v", s)
 		}
 		return nil
