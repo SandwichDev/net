@@ -7,6 +7,7 @@
 package http2
 
 import (
+	"context"
 	"crypto/tls"
 	"sync"
 
@@ -79,7 +80,7 @@ func (p *clientConnPool) getClientConn(req *http.Request, addr string, dialOnMis
 		// It gets its own connection.
 		traceGetConn(req, addr)
 		const singleUse = true
-		cc, err := p.t.dialClientConn(addr, singleUse)
+		cc, err := p.t.dialClientConn(req.Context(), addr, singleUse)
 		if err != nil {
 			return nil, err
 		}
@@ -100,7 +101,7 @@ func (p *clientConnPool) getClientConn(req *http.Request, addr string, dialOnMis
 		return nil, ErrNoCachedConn
 	}
 	traceGetConn(req, addr)
-	call := p.getStartDialLocked(addr)
+	call := p.getStartDialLocked(req.Context(), addr)
 	p.mu.Unlock()
 	<-call.done
 	return call.res, call.err
@@ -108,32 +109,35 @@ func (p *clientConnPool) getClientConn(req *http.Request, addr string, dialOnMis
 
 // dialCall is an in-flight Transport dial call to a host.
 type dialCall struct {
-	_    incomparable
-	p    *clientConnPool
+	_ incomparable
+	p *clientConnPool
+	// the context associated with the request
+	// that created this dialCall
+	ctx  context.Context
 	done chan struct{} // closed when done
 	res  *ClientConn   // valid after done is closed
 	err  error         // valid after done is closed
 }
 
 // requires p.mu is held.
-func (p *clientConnPool) getStartDialLocked(addr string) *dialCall {
+func (p *clientConnPool) getStartDialLocked(ctx context.Context, addr string) *dialCall {
 	if call, ok := p.dialing[addr]; ok {
 		// A dial is already in-flight. Don't start another.
 		return call
 	}
-	call := &dialCall{p: p, done: make(chan struct{})}
+	call := &dialCall{p: p, done: make(chan struct{}), ctx: ctx}
 	if p.dialing == nil {
 		p.dialing = make(map[string]*dialCall)
 	}
 	p.dialing[addr] = call
-	go call.dial(addr)
+	go call.dial(call.ctx, addr)
 	return call
 }
 
 // run in its own goroutine.
-func (c *dialCall) dial(addr string) {
+func (c *dialCall) dial(ctx context.Context, addr string) {
 	const singleUse = false // shared conn
-	c.res, c.err = c.p.t.dialClientConn(addr, singleUse)
+	c.res, c.err = c.p.t.dialClientConn(ctx, addr, singleUse)
 	close(c.done)
 
 	c.p.mu.Lock()
